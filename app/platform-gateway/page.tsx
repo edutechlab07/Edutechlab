@@ -166,17 +166,45 @@ export default function PlatformGatewayPage() {
     try {
       let email = identifier.trim();
 
-      // If typed Master ID starting with EDU-, resolve via Edge Function
+      // If typed Master ID starting with EDU-, resolve via RPC / API
       if (email.toUpperCase().startsWith("EDU-")) {
-        const { data: resolved, error: resolveErr } = await supabase.functions.invoke(
-          "resolve-login-id",
-          { body: { loginId: email.toUpperCase() } }
-        );
+        let resolvedEmail: string | null = null;
+        try {
+          const { data: rpcRes } = await supabase.rpc("resolve_login_id", {
+            p_login_id: email.toUpperCase(),
+          });
+          if (rpcRes?.email) resolvedEmail = rpcRes.email;
+        } catch {}
 
-        if (resolveErr || !resolved?.email) {
+        if (!resolvedEmail) {
+          try {
+            const apiRes = await fetch("/api/resolve-login-id", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ loginId: email.toUpperCase() }),
+            });
+            const apiJson = await apiRes.json();
+            if (apiJson?.email) resolvedEmail = apiJson.email;
+          } catch {}
+        }
+
+        if (!resolvedEmail) {
+          const { data: resolved, error: resolveErr } = await supabase.functions.invoke(
+            "resolve-login-id",
+            { body: { loginId: email.toUpperCase() } }
+          );
+
+          if (resolveErr || !resolved?.email) {
+            throw new Error("Invalid Super Admin ID or password.");
+          }
+          resolvedEmail = resolved.email;
+        }
+
+        if (!resolvedEmail) {
           throw new Error("Invalid Super Admin ID or password.");
         }
-        email = resolved.email;
+
+        email = resolvedEmail;
       }
 
       // Step 1: Supabase Authentication

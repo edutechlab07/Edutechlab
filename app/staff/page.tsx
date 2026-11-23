@@ -278,14 +278,48 @@ export default function StaffPage() {
     setSaved("");
 
     try {
-      const { data, error: invokeErr } = await supabase.functions.invoke("create-staff", {
-        body: {
-          fullName: createForm.fullName.trim(),
-          email: createForm.email.trim().toLowerCase(),
-          password: createForm.password,
-          role: createForm.role.trim() || "teacher",
-        },
-      });
+      const { data: { session } } = await supabase.auth.getSession();
+      let data: any = null;
+      let invokeErr: any = null;
+
+      // 1. Try internal Next.js API route first
+      if (session?.access_token) {
+        try {
+          const apiRes = await fetch("/api/create-staff", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              fullName: createForm.fullName.trim(),
+              email: createForm.email.trim().toLowerCase(),
+              password: createForm.password,
+              role: createForm.role.trim() || "teacher",
+            }),
+          });
+          const apiJson = await apiRes.json();
+          if (apiRes.ok && apiJson?.staffId) {
+            data = apiJson;
+          } else if (apiJson?.error) {
+            invokeErr = new Error(apiJson.error);
+          }
+        } catch {}
+      }
+
+      // 2. Fallback to edge function if needed
+      if (!data && !invokeErr) {
+        const edgeRes = await supabase.functions.invoke("create-staff", {
+          body: {
+            fullName: createForm.fullName.trim(),
+            email: createForm.email.trim().toLowerCase(),
+            password: createForm.password,
+            role: createForm.role.trim() || "teacher",
+          },
+        });
+        data = edgeRes.data;
+        invokeErr = edgeRes.error;
+      }
 
       if (invokeErr) {
         let msg = invokeErr.message || "Could not create staff account.";
@@ -446,9 +480,40 @@ export default function StaffPage() {
     setSaved("");
 
     try {
-      const { data, error: invokeErr } = await supabase.functions.invoke("delete-staff", {
-        body: { staffId: staff.id },
-      });
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+
+      let data: any = null;
+      let invokeErr: any = null;
+
+      // 1. Try Next.js internal API first
+      if (token) {
+        try {
+          const apiRes = await fetch("/api/delete-staff", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ staffId: staff.id }),
+          });
+          const apiJson = await apiRes.json();
+          if (apiRes.ok && apiJson?.success) {
+            data = apiJson;
+          } else if (apiJson?.error) {
+            invokeErr = new Error(apiJson.error);
+          }
+        } catch {}
+      }
+
+      // 2. Fallback to Supabase edge function
+      if (!data && !invokeErr) {
+        const edgeRes = await supabase.functions.invoke("delete-staff", {
+          body: { staffId: staff.id },
+        });
+        data = edgeRes.data;
+        invokeErr = edgeRes.error;
+      }
 
       if (invokeErr) {
         let msg = invokeErr.message || "Could not delete staff account.";

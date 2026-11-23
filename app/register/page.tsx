@@ -120,19 +120,52 @@ export default function RegisterPage() {
     setLoading(true);
     setError("");
 
-    const { data, error: fnError } = await supabase.functions.invoke("register-institute", {
-      body: {
-        instituteName: form.name,
-        instituteType: form.type,
-        address: form.address,
-        phone: form.phone,
-        instituteEmail: form.email,
-        adminName: form.adminName,
-        adminEmail: form.adminEmail,
-        password: form.password,
-        referralCode: form.referralCode.trim().toUpperCase() || undefined,
-      },
-    });
+    let data: any = null;
+    let fnError: any = null;
+
+    // 1. Try internal Next.js API route first
+    try {
+      const res = await fetch("/api/register-institute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instituteName: form.name,
+          instituteType: form.type,
+          address: form.address,
+          phone: form.phone,
+          instituteEmail: form.email,
+          adminName: form.adminName,
+          adminEmail: form.adminEmail,
+          password: form.password,
+          referralCode: form.referralCode.trim().toUpperCase() || undefined,
+        }),
+      });
+      const resJson = await res.json();
+      if (res.ok && resJson?.loginId) {
+        data = resJson;
+      } else if (resJson?.error) {
+        fnError = new Error(resJson.error);
+      }
+    } catch {}
+
+    // 2. Fallback to edge function if needed
+    if (!data && !fnError) {
+      const edgeRes = await supabase.functions.invoke("register-institute", {
+        body: {
+          instituteName: form.name,
+          instituteType: form.type,
+          address: form.address,
+          phone: form.phone,
+          instituteEmail: form.email,
+          adminName: form.adminName,
+          adminEmail: form.adminEmail,
+          password: form.password,
+          referralCode: form.referralCode.trim().toUpperCase() || undefined,
+        },
+      });
+      data = edgeRes.data;
+      fnError = edgeRes.error;
+    }
 
     if (fnError) {
       let message = "Registration could not be completed. Please try again.";

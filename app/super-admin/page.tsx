@@ -2468,16 +2468,46 @@ Warm regards,
       const generatedEmail = `${cleanSlug}_${randomTag}@edutechlab.demo`;
       const finalEmail = demoForm.email.trim().toLowerCase() || generatedEmail;
 
-      const { data, error: fnError } = await supabase.functions.invoke("register-institute", {
-        body: {
-          instituteName: demoForm.name.trim(),
-          instituteType: demoForm.type,
-          adminName: demoForm.directorName.trim() || "Institute Director",
-          adminEmail: finalEmail,
-          password: demoForm.password.trim(),
-          phone: demoForm.phone.trim() || undefined,
-        },
-      });
+      let data: any = null;
+      let fnError: any = null;
+
+      // 1. Try Next.js internal API first
+      try {
+        const apiRes = await fetch("/api/register-institute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            instituteName: demoForm.name.trim(),
+            instituteType: demoForm.type,
+            adminName: demoForm.directorName.trim() || "Institute Director",
+            adminEmail: finalEmail,
+            password: demoForm.password.trim(),
+            phone: demoForm.phone.trim() || undefined,
+          }),
+        });
+        const apiJson = await apiRes.json();
+        if (apiRes.ok && apiJson?.loginId) {
+          data = apiJson;
+        } else if (apiJson?.error) {
+          fnError = new Error(apiJson.error);
+        }
+      } catch {}
+
+      // 2. Fallback to Supabase edge function
+      if (!data && !fnError) {
+        const edgeRes = await supabase.functions.invoke("register-institute", {
+          body: {
+            instituteName: demoForm.name.trim(),
+            instituteType: demoForm.type,
+            adminName: demoForm.directorName.trim() || "Institute Director",
+            adminEmail: finalEmail,
+            password: demoForm.password.trim(),
+            phone: demoForm.phone.trim() || undefined,
+          },
+        });
+        data = edgeRes.data;
+        fnError = edgeRes.error;
+      }
 
       if (fnError || data?.error) {
         throw new Error(fnError?.message || data?.error || "Failed to create demo account.");

@@ -143,21 +143,62 @@ export default function LoginPage() {
         return;
       }
 
-      const { data: resolved, error: resolveError } =
-        await supabase.functions.invoke("resolve-login-id", {
-          body: { loginId: normalized },
+      // 1. Try fast database RPC first
+      let resolvedEmail: string | null = null;
+      try {
+        const { data: rpcRes, error: rpcErr } = await supabase.rpc("resolve_login_id", {
+          p_login_id: normalized,
         });
+        if (!rpcErr && rpcRes?.email) {
+          resolvedEmail = rpcRes.email;
+        }
+      } catch {}
 
-      if (resolveError || !resolved?.email) {
-        setError(
-          resolveError?.message ||
-            resolved?.error ||
-            "Institute / Staff ID or password is incorrect."
-        );
+      // 2. If not found via RPC, try internal API route / Edge function
+      if (!resolvedEmail) {
+        try {
+          const apiRes = await fetch("/api/resolve-login-id", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ loginId: normalized }),
+          });
+          const apiJson = await apiRes.json();
+          if (apiRes.ok && apiJson?.email) {
+            resolvedEmail = apiJson.email;
+          } else if (apiJson?.error) {
+            setError(apiJson.error);
+            setLoading(false);
+            return;
+          }
+        } catch {}
+      }
+
+      // 3. Fallback to edge function if needed
+      if (!resolvedEmail) {
+        const { data: resolved, error: resolveError } =
+          await supabase.functions.invoke("resolve-login-id", {
+            body: { loginId: normalized },
+          });
+
+        if (resolveError || !resolved?.email) {
+          setError(
+            resolveError?.message ||
+              resolved?.error ||
+              "Institute / Staff ID or password is incorrect."
+          );
+          setLoading(false);
+          return;
+        }
+        resolvedEmail = resolved.email;
+      }
+
+      if (!resolvedEmail) {
+        setError("Institute / Staff ID or password is incorrect.");
         setLoading(false);
         return;
       }
-      emailToAuth = resolved.email;
+
+      emailToAuth = resolvedEmail;
     }
 
     const { data: sessionData, error: authError } =
