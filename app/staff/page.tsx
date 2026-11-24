@@ -294,43 +294,30 @@ export default function StaffPage() {
       let data: any = null;
       let invokeErr: any = null;
 
-      // 1. Try internal Next.js API route first
-      if (session?.access_token) {
-        try {
-          const apiRes = await fetch("/api/create-staff", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({
-              fullName: createForm.fullName.trim(),
-              email: createForm.email.trim().toLowerCase(),
-              password: createForm.password,
-              role: createForm.role.trim() || "teacher",
-            }),
-          });
-          const apiJson = await apiRes.json();
-          if (apiRes.ok && apiJson?.staffId) {
-            data = apiJson;
-          } else if (apiJson?.error) {
-            invokeErr = new Error(apiJson.error);
-          }
-        } catch {}
+      if (!session?.access_token) {
+        throw new Error("Authentication session expired. Please re-login.");
       }
 
-      // 2. Fallback to edge function if needed
-      if (!data && !invokeErr) {
-        const edgeRes = await supabase.functions.invoke("create-staff", {
-          body: {
-            fullName: createForm.fullName.trim(),
-            email: createForm.email.trim().toLowerCase(),
-            password: createForm.password,
-            role: createForm.role.trim() || "teacher",
-          },
-        });
-        data = edgeRes.data;
-        invokeErr = edgeRes.error;
+      const apiRes = await fetch("/api/create-staff", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          fullName: createForm.fullName.trim(),
+          email: createForm.email.trim().toLowerCase(),
+          password: createForm.password,
+          role: createForm.role.trim() || "teacher",
+        }),
+      });
+      const apiJson = await apiRes.json().catch(() => null);
+      if (apiRes.ok && apiJson?.staffId) {
+        data = apiJson;
+      } else if (apiJson?.error) {
+        invokeErr = new Error(apiJson.error);
+      } else {
+        invokeErr = new Error(`Failed to create staff (${apiRes.status}).`);
       }
 
       if (invokeErr) {
@@ -498,33 +485,23 @@ export default function StaffPage() {
       let data: any = null;
       let invokeErr: any = null;
 
-      // 1. Try Next.js internal API first
-      if (token) {
-        try {
-          const apiRes = await fetch("/api/delete-staff", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ staffId: staff.id }),
-          });
-          const apiJson = await apiRes.json();
-          if (apiRes.ok && apiJson?.success) {
-            data = apiJson;
-          } else if (apiJson?.error) {
-            invokeErr = new Error(apiJson.error);
-          }
-        } catch {}
-      }
+      if (!token) throw new Error("Authentication session expired. Please re-login.");
 
-      // 2. Fallback to Supabase edge function
-      if (!data && !invokeErr) {
-        const edgeRes = await supabase.functions.invoke("delete-staff", {
-          body: { staffId: staff.id },
-        });
-        data = edgeRes.data;
-        invokeErr = edgeRes.error;
+      const apiRes = await fetch("/api/delete-staff", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ staffId: staff.id }),
+      });
+      const apiJson = await apiRes.json().catch(() => null);
+      if (apiRes.ok && apiJson?.success) {
+        data = apiJson;
+      } else if (apiJson?.error) {
+        invokeErr = new Error(apiJson.error);
+      } else {
+        invokeErr = new Error(`Could not delete staff account (${apiRes.status}).`);
       }
 
       if (invokeErr) {

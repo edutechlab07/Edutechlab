@@ -123,7 +123,7 @@ export default function RegisterPage() {
     let data: any = null;
     let fnError: any = null;
 
-    // 1. Try internal Next.js API route first
+    // Call internal Next.js API route
     try {
       const res = await fetch("/api/register-institute", {
         method: "POST",
@@ -140,31 +140,16 @@ export default function RegisterPage() {
           referralCode: form.referralCode.trim().toUpperCase() || undefined,
         }),
       });
-      const resJson = await res.json();
+      const resJson = await res.json().catch(() => null);
       if (res.ok && resJson?.loginId) {
         data = resJson;
       } else if (resJson?.error) {
         fnError = new Error(resJson.error);
+      } else {
+        fnError = new Error(`Registration request failed (${res.status}). Please try again.`);
       }
-    } catch {}
-
-    // 2. Fallback to edge function if needed
-    if (!data && !fnError) {
-      const edgeRes = await supabase.functions.invoke("register-institute", {
-        body: {
-          instituteName: form.name,
-          instituteType: form.type,
-          address: form.address,
-          phone: form.phone,
-          instituteEmail: form.email,
-          adminName: form.adminName,
-          adminEmail: form.adminEmail,
-          password: form.password,
-          referralCode: form.referralCode.trim().toUpperCase() || undefined,
-        },
-      });
-      data = edgeRes.data;
-      fnError = edgeRes.error;
+    } catch (e: any) {
+      fnError = new Error(e.message || "Network error. Please check your internet connection.");
     }
 
     if (fnError) {

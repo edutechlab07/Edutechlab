@@ -154,7 +154,7 @@ export default function LoginPage() {
         }
       } catch {}
 
-      // 2. If not found via RPC, try internal API route / Edge function
+      // 2. If not found via RPC, try internal API route
       if (!resolvedEmail) {
         try {
           const apiRes = await fetch("/api/resolve-login-id", {
@@ -171,25 +171,6 @@ export default function LoginPage() {
             return;
           }
         } catch {}
-      }
-
-      // 3. Fallback to edge function if needed
-      if (!resolvedEmail) {
-        const { data: resolved, error: resolveError } =
-          await supabase.functions.invoke("resolve-login-id", {
-            body: { loginId: normalized },
-          });
-
-        if (resolveError || !resolved?.email) {
-          setError(
-            resolveError?.message ||
-              resolved?.error ||
-              "Institute / Staff ID or password is incorrect."
-          );
-          setLoading(false);
-          return;
-        }
-        resolvedEmail = resolved.email;
       }
 
       if (!resolvedEmail) {

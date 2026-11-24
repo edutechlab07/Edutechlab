@@ -189,18 +189,6 @@ export default function PlatformGatewayPage() {
         }
 
         if (!resolvedEmail) {
-          const { data: resolved, error: resolveErr } = await supabase.functions.invoke(
-            "resolve-login-id",
-            { body: { loginId: email.toUpperCase() } }
-          );
-
-          if (resolveErr || !resolved?.email) {
-            throw new Error("Invalid Super Admin ID or password.");
-          }
-          resolvedEmail = resolved.email;
-        }
-
-        if (!resolvedEmail) {
           throw new Error("Invalid Super Admin ID or password.");
         }
 

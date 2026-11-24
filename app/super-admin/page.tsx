@@ -2471,7 +2471,6 @@ Warm regards,
       let data: any = null;
       let fnError: any = null;
 
-      // 1. Try Next.js internal API first
       try {
         const apiRes = await fetch("/api/register-institute", {
           method: "POST",
@@ -2485,31 +2484,19 @@ Warm regards,
             phone: demoForm.phone.trim() || undefined,
           }),
         });
-        const apiJson = await apiRes.json();
+        const apiJson = await apiRes.json().catch(() => null);
         if (apiRes.ok && apiJson?.loginId) {
           data = apiJson;
         } else if (apiJson?.error) {
           fnError = new Error(apiJson.error);
+        } else {
+          fnError = new Error(`Request failed (${apiRes.status}). Please try again.`);
         }
-      } catch {}
-
-      // 2. Fallback to Supabase edge function
-      if (!data && !fnError) {
-        const edgeRes = await supabase.functions.invoke("register-institute", {
-          body: {
-            instituteName: demoForm.name.trim(),
-            instituteType: demoForm.type,
-            adminName: demoForm.directorName.trim() || "Institute Director",
-            adminEmail: finalEmail,
-            password: demoForm.password.trim(),
-            phone: demoForm.phone.trim() || undefined,
-          },
-        });
-        data = edgeRes.data;
-        fnError = edgeRes.error;
+      } catch (err: any) {
+        fnError = new Error(err.message || "Failed to create demo account.");
       }
 
-      if (fnError || data?.error) {
+      if (fnError || !data?.loginId) {
         throw new Error(fnError?.message || data?.error || "Failed to create demo account.");
       }
 
