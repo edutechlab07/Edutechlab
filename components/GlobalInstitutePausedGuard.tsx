@@ -57,7 +57,7 @@ export default function GlobalInstitutePausedGuard() {
       // 1. Try selecting with is_paused columns first
       const res1 = await supabase
         .from("profiles")
-        .select("id, role, organization_id, organizations(name, is_active, status, enabled_features, is_paused, pause_reason, paused_at)")
+        .select("id, role, organization_id, organizations!profiles_organization_id_fkey(name, is_active, status, enabled_features, is_paused, pause_reason, paused_at)")
         .eq("id", user.id)
         .maybeSingle();
 
@@ -65,15 +65,14 @@ export default function GlobalInstitutePausedGuard() {
         p = res1.data;
         orgData = (res1.data as any)?.organizations;
       } else {
-        // Fallback without new columns in case migration 0017 not run yet
+        // Fallback without embed or with direct profile fetch
         const res2 = await supabase
           .from("profiles")
-          .select("id, role, organization_id, organizations(name, is_active, status, enabled_features)")
+          .select("id, role, organization_id")
           .eq("id", user.id)
           .maybeSingle();
         if (res2.data) {
           p = res2.data;
-          orgData = (res2.data as any)?.organizations;
         }
       }
 

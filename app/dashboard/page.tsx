@@ -172,30 +172,41 @@ export default function Dashboard() {
         }
 
         let pData: any = null;
-        const { data: p, error: pError } = await supabase
+        let orgData: any = null;
+
+        // 1. Try joined query with explicit foreign key
+        const { data: p } = await supabase
           .from("profiles")
-          .select("full_name,login_id,organization_id,role,organizations(name,enabled_features,is_paused,pause_reason,paused_at)")
+          .select("full_name,login_id,organization_id,role,organizations!profiles_organization_id_fkey(name,enabled_features,is_paused,pause_reason,paused_at)")
           .eq("id", user.id)
-          .single();
+          .maybeSingle();
 
-        if (pError || !p) {
-          const { data: pFallback } = await supabase
+        if (p && (p as any).organizations) {
+          pData = p;
+          orgData = (p as any).organizations;
+        } else {
+          // 2. Direct two-step fetch fallback (guaranteed never to fail on relationship ambiguities)
+          const { data: pDirect } = await supabase
             .from("profiles")
-            .select("full_name,login_id,organization_id,role,organizations(name,enabled_features)")
+            .select("full_name,login_id,organization_id,role")
             .eq("id", user.id)
-            .single();
+            .maybeSingle();
 
-          if (!pFallback) {
+          if (!pDirect?.organization_id) {
             setError("We couldn't load your institute workspace.");
             setLoading(false);
             return;
           }
-          pData = pFallback;
-        } else {
-          pData = p;
-        }
 
-        const orgData = (pData as any)?.organizations;
+          const { data: oDirect } = await supabase
+            .from("organizations")
+            .select("name,enabled_features,is_paused,pause_reason,paused_at")
+            .eq("id", pDirect.organization_id)
+            .maybeSingle();
+
+          pData = { ...pDirect, organizations: oDirect };
+          orgData = oDirect;
+        }
         const rawFeat = orgData?.enabled_features;
         if (
           orgData?.is_paused ||

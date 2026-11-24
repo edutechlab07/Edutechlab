@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
 
     const { data: profile, error } = await admin
       .from("profiles")
-      .select("id, full_name, is_active, organization_id, organizations(is_active, status)")
+      .select("id, full_name, is_active, organization_id, organizations!profiles_organization_id_fkey(is_active, status)")
       .eq("login_id", normalized)
       .maybeSingle();
 

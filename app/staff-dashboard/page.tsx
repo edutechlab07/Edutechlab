@@ -93,21 +93,43 @@ export default function StaffDashboard() {
           return;
         }
 
-        const { data: p, error: pError } = await supabase
+        let pData: any = null;
+        const { data: p } = await supabase
           .from("profiles")
-          .select("id, full_name, login_id, organization_id, role, phone, organizations(name)")
+          .select("id, full_name, login_id, organization_id, role, phone, organizations!profiles_organization_id_fkey(name)")
           .eq("id", user.id)
-          .single();
+          .maybeSingle();
 
-        if (pError || !p) {
-          setError("We couldn't load your staff workspace profile.");
-          setLoading(false);
-          return;
+        if (p) {
+          pData = p;
+        } else {
+          const { data: pDirect } = await supabase
+            .from("profiles")
+            .select("id, full_name, login_id, organization_id, role, phone")
+            .eq("id", user.id)
+            .maybeSingle();
+
+          if (!pDirect) {
+            setError("We couldn't load your staff workspace profile.");
+            setLoading(false);
+            return;
+          }
+
+          let oDirect: any = null;
+          if (pDirect.organization_id) {
+            const { data: o } = await supabase
+              .from("organizations")
+              .select("name")
+              .eq("id", pDirect.organization_id)
+              .maybeSingle();
+            oDirect = o;
+          }
+          pData = { ...pDirect, organizations: oDirect };
         }
 
-        setProfile(p as unknown as Profile);
-        const orgId = p.organization_id;
-        const role = String(p.role || "").trim().toLowerCase();
+        setProfile(pData as unknown as Profile);
+        const orgId = pData.organization_id;
+        const role = String(pData.role || "").trim().toLowerCase();
         const isAdmin = role === "owner" || role === "admin";
 
         if (isAdmin) {

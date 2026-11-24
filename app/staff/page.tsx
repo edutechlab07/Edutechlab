@@ -123,16 +123,28 @@ export default function StaffPage() {
       return;
     }
 
-    const { data: p, error: pe } = await supabase
+    let p: any = null;
+    const { data: pJoined } = await supabase
       .from("profiles")
-      .select("organization_id, role, organizations(name)")
+      .select("organization_id, role, organizations!profiles_organization_id_fkey(name)")
       .eq("id", user.id)
-      .single();
+      .maybeSingle();
 
-    if (pe || !p) {
-      setError("Could not load staff workspace.");
-      setLoading(false);
-      return;
+    if (pJoined) {
+      p = pJoined;
+    } else {
+      const { data: pDirect } = await supabase
+        .from("profiles")
+        .select("organization_id, role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!pDirect) {
+        setError("Could not load staff workspace.");
+        setLoading(false);
+        return;
+      }
+      p = pDirect;
     }
 
     if (!["owner", "admin"].includes(p.role)) {

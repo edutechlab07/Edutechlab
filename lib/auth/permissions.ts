@@ -182,27 +182,38 @@ export function useUserAccess(requiredCodes: string[] = []) {
       }
 
       let pData: any = null;
-      const { data: p, error: pErr } = await supabase
+      const { data: p } = await supabase
         .from("profiles")
-        .select("id, organization_id, role, full_name, login_id, phone, is_active, organizations(name, is_active, status, is_paused, pause_reason, paused_at, enabled_features)")
+        .select("id, organization_id, role, full_name, login_id, phone, is_active, organizations!profiles_organization_id_fkey(name, is_active, status, is_paused, pause_reason, paused_at, enabled_features)")
         .eq("id", user.id)
-        .single();
+        .maybeSingle();
 
-      if (pErr || !p) {
-        const { data: pFallback } = await supabase
+      if (p && (p as any).organizations) {
+        pData = p;
+      } else {
+        const { data: pDirect } = await supabase
           .from("profiles")
-          .select("id, organization_id, role, full_name, login_id, phone, is_active, organizations(name, is_active, status, enabled_features)")
+          .select("id, organization_id, role, full_name, login_id, phone, is_active")
           .eq("id", user.id)
-          .single();
+          .maybeSingle();
 
-        if (!pFallback) {
+        if (!pDirect) {
           setError("Could not load user profile or organization.");
           setLoading(false);
           return;
         }
-        pData = pFallback;
-      } else {
-        pData = p;
+
+        let oDirect: any = null;
+        if (pDirect.organization_id) {
+          const { data: o } = await supabase
+            .from("organizations")
+            .select("name, is_active, status, is_paused, pause_reason, paused_at, enabled_features")
+            .eq("id", pDirect.organization_id)
+            .maybeSingle();
+          oDirect = o;
+        }
+
+        pData = { ...pDirect, organizations: oDirect };
       }
 
       if (pData.is_active === false) {
