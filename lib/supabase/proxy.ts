@@ -3,7 +3,12 @@ import { NextResponse, type NextRequest } from 'next/server'
 
 export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname
-  if (pathname.startsWith("/api/")) {
+  if (
+    pathname.startsWith("/api/") ||
+    pathname === "/sitemap.xml" ||
+    pathname === "/robots.txt" ||
+    pathname === "/favicon.ico"
+  ) {
     return NextResponse.next()
   }
 
@@ -33,6 +38,8 @@ export async function updateSession(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const isPublic =
     pathname.startsWith("/api/") ||
+    pathname === "/sitemap.xml" ||
+    pathname === "/robots.txt" ||
     pathname === "/" ||
     pathname === "/login" ||
     pathname === "/register" ||
