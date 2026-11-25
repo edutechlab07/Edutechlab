@@ -1,0 +1,66 @@
+import { MetadataRoute } from "next";
+
+export default function robots(): MetadataRoute.Robots {
+  const baseUrl = "https://www.edutechlab.in";
+
+  return {
+    rules: [
+      {
+        userAgent: "*",
+        allow: [
+          "/",
+          "/register",
+          "/login",
+          "/parent-portal",
+          "/agent-portal",
+          "/preview",
+          "/icons/",
+          "/manifest.json",
+          "/favicon.ico",
+        ],
+        disallow: [
+          "/dashboard",
+          "/dashboard/*",
+          "/staff-dashboard",
+          "/staff-dashboard/*",
+          "/super-admin",
+          "/super-admin/*",
+          "/api/*",
+          "/students",
+          "/students/*",
+          "/attendance",
+          "/attendance/*",
+          "/fees",
+          "/fees/*",
+          "/exams",
+          "/exams/*",
+          "/id-cards",
+          "/id-cards/*",
+          "/certificates",
+          "/certificates/*",
+          "/homework",
+          "/homework/*",
+          "/timetable",
+          "/timetable/*",
+          "/notices",
+          "/notices/*",
+          "/official-notices",
+          "/official-notices/*",
+          "/teachers",
+          "/teachers/*",
+          "/academics",
+          "/academics/*",
+          "/expenses",
+          "/expenses/*",
+          "/settings",
+          "/settings/*",
+          "/staff",
+          "/staff/*",
+          "/subscription",
+          "/subscription/*",
+        ],
+      },
+    ],
+    sitemap: `${baseUrl}/sitemap.xml`,
+  };
+}
