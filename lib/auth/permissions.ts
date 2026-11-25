@@ -250,11 +250,11 @@ export function useUserAccess(requiredCodes: string[] = []) {
 
       setProfile(pData as Profile);
       const role = String(pData.role || "").trim().toLowerCase();
-      const isAdmin = role === "owner" || role === "admin";
+      const isAdmin = role === "owner" || role === "admin" || role === "super_admin" || role === "platform_owner";
 
       let granted = new Set<string>();
       if (isAdmin) {
-        // Admin gets all system permissions automatically
+        // School Owner / Admin gets all system permissions automatically
         granted = new Set(ALL_SYSTEM_PERMISSIONS.map(x => x.code));
       } else {
         const { data: grants } = await supabase
@@ -273,10 +273,10 @@ export function useUserAccess(requiredCodes: string[] = []) {
 
       setPermissions(granted);
 
-      if (requiredCodes.length === 0) {
+      if (isAdmin || requiredCodes.length === 0) {
         setHasAccess(true);
       } else {
-        const permitted = isAdmin || requiredCodes.some((code) => granted.has(code));
+        const permitted = requiredCodes.some((code) => granted.has(code));
         setHasAccess(permitted);
       }
     } catch (err) {
@@ -292,15 +292,15 @@ export function useUserAccess(requiredCodes: string[] = []) {
 
   const can = (code: string) => {
     const role = String(profile?.role || "").trim().toLowerCase();
-    return role === "owner" || role === "admin" || permissions.has(code);
+    return role === "owner" || role === "admin" || role === "super_admin" || role === "platform_owner" || permissions.has(code);
   };
 
   const canAny = (codes: string[]) => {
     const role = String(profile?.role || "").trim().toLowerCase();
-    return role === "owner" || role === "admin" || codes.some((code) => permissions.has(code));
+    return role === "owner" || role === "admin" || role === "super_admin" || role === "platform_owner" || codes.some((code) => permissions.has(code));
   };
 
-  const isAdmin = ["owner", "admin"].includes(String(profile?.role || "").trim().toLowerCase());
+  const isAdmin = ["owner", "admin", "super_admin", "platform_owner"].includes(String(profile?.role || "").trim().toLowerCase());
 
   return {
     loading,
