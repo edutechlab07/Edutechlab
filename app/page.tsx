@@ -167,10 +167,17 @@ export default function Home() {
 
   // Pricing Calculation based on Transparent Model: Standard vs Pro
   const ratePerStudent = selectedPlanType === "standard" ? platformSettings.standard_rate : platformSettings.pro_rate;
-  const calculatedCost = studentCount * ratePerStudent;
-  const legacySoftwareCost = Math.round(studentCount * 35);
+  // Large School Max Cap: Badi schools (400-600+ students) ke liye flat ceiling cap
+  // Standard plan max ₹1,699/mo (₹19,999/yr), Pro plan max ₹2,199/mo (₹24,999/yr)
+  const maxCapMonthly = selectedPlanType === "standard" ? 1699 : 2199;
+  const uncappedCost = studentCount * ratePerStudent;
+  const isCapApplied = uncappedCost > maxCapMonthly;
+  const calculatedCost = Math.min(uncappedCost, maxCapMonthly);
+  const monthlySavingsFromCap = Math.max(0, uncappedCost - calculatedCost);
+
+  const legacySoftwareCost = Math.max(3500, Math.round(studentCount * 35));
   const estimatedSavings = Math.max(
-    60,
+    65,
     Math.round(((legacySoftwareCost - calculatedCost) / legacySoftwareCost) * 100)
   );
 
@@ -696,6 +703,10 @@ export default function Home() {
                   <span className="text-4xl sm:text-5xl font-black text-slate-900 font-mono">₹5</span>
                   <span className="text-xs font-bold text-slate-500">/ student / month</span>
                 </div>
+                <div className="mt-2 inline-flex items-center gap-1 rounded-md bg-teal-50 px-2 py-0.5 text-[10px] font-bold text-teal-800 border border-teal-200">
+                  <ShieldCheck size={12} className="text-teal-600" />
+                  <span>Max Cap: Max ₹1,699/mo (₹19,999/yr) Flat Ceiling</span>
+                </div>
                 <p className="mt-2 text-xs text-slate-500 font-medium">
                   Ideal for budget-conscious schools, tuition centres & simple registers.
                 </p>
@@ -772,6 +783,10 @@ export default function Home() {
                 <div className="mt-5 flex items-baseline gap-1.5">
                   <span className="text-4xl sm:text-5xl font-black text-purple-950 font-mono">₹7</span>
                   <span className="text-xs font-bold text-slate-500">/ student / month</span>
+                </div>
+                <div className="mt-2 inline-flex items-center gap-1 rounded-md bg-purple-100/70 px-2 py-0.5 text-[10px] font-bold text-purple-900 border border-purple-200">
+                  <ShieldCheck size={12} className="text-purple-600" />
+                  <span>Max Cap: Max ₹2,199/mo (₹24,999/yr) Flat Ceiling</span>
                 </div>
                 <p className="mt-2 text-xs text-purple-900 font-semibold">
                   Sirf ₹2 extra me pura Anti-Counterfeit & Gate Security Smart System!
@@ -906,9 +921,20 @@ export default function Home() {
                   ₹{calculatedCost.toLocaleString("en-IN")}
                   <span className="text-xs font-normal text-slate-500"> /month</span>
                 </p>
-                <p className="mt-2 text-[11px] font-semibold text-purple-700">
-                  ₹{(calculatedCost * 12).toLocaleString("en-IN")} / saal ({studentCount} × ₹{ratePerStudent})
-                </p>
+                <div className="mt-2 text-[11px] font-semibold text-purple-700">
+                  {isCapApplied ? (
+                    <div className="space-y-0.5">
+                      <p className="text-emerald-700 font-extrabold flex items-center justify-center gap-1">
+                        <ShieldCheck size={13} /> Max Cap Active (₹{(calculatedCost * 12).toLocaleString("en-IN")}/yr)
+                      </p>
+                      <p className="text-[10px] text-slate-400 line-through">
+                        Normal rate: ₹{uncappedCost.toLocaleString("en-IN")}/mo
+                      </p>
+                    </div>
+                  ) : (
+                    <p>₹{(calculatedCost * 12).toLocaleString("en-IN")} / saal ({studentCount} × ₹{ratePerStudent})</p>
+                  )}
+                </div>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-5 text-center">
@@ -932,10 +958,32 @@ export default function Home() {
                   {estimatedSavings}% Sasta
                 </p>
                 <p className="mt-1 text-[11px] text-teal-800 font-medium">
-                  Sirf ₹{(ratePerStudent / 30).toFixed(2)} per child per day!
+                  {isCapApplied
+                    ? `Max cap se ₹${monthlySavingsFromCap.toLocaleString("en-IN")}/mo ki extra bachat!`
+                    : `Sirf ₹${(ratePerStudent / 30).toFixed(2)} per child per day!`}
                 </p>
               </div>
             </div>
+
+            {/* MAX CAP NOTIFICATION BANNER */}
+            {isCapApplied && (
+              <div className="mt-4 rounded-2xl border border-emerald-300 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-emerald-950 animate-in fade-in">
+                <div className="flex items-center gap-2.5">
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-xl bg-emerald-600 text-white font-bold text-xs shadow-xs">
+                    ✓
+                  </span>
+                  <div>
+                    <span className="font-extrabold text-emerald-900">Large School Max-Cap Protection Active: </span>
+                    <span className="text-slate-700">
+                      Aapke <strong>{studentCount} students</strong> hone ke bawajood aapka plan ₹{calculatedCost.toLocaleString("en-IN")}/month par capped hai. Kisi bhi bade school ka kharcha flat ceiling se upar kabhi nahi ja sakta!
+                    </span>
+                  </div>
+                </div>
+                <span className="rounded-lg bg-emerald-700 px-3 py-1 font-bold text-white text-[11px] shrink-0 shadow-xs">
+                  Max ₹{(calculatedCost * 12).toLocaleString("en-IN")}/Year Flat
+                </span>
+              </div>
+            )}
 
             {/* CTA inside calculator */}
             <div className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 pt-6 border-t border-slate-100">
@@ -949,6 +997,101 @@ export default function Home() {
                 <span>{studentCount} Students Ke Liye Free Trial Chalu Karein</span>
                 <ArrowRight size={14} />
               </Link>
+            </div>
+          </div>
+
+          {/* 5.1 ZERO HIDDEN COST GUARANTEE SECTION */}
+          <div className="mt-14 rounded-3xl border-2 border-emerald-200 bg-gradient-to-br from-emerald-50/60 via-white to-teal-50/50 p-6 sm:p-10 shadow-lg shadow-emerald-900/5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-emerald-100 pb-6">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-600 text-white shadow-md shadow-emerald-600/30">
+                  <ShieldCheck size={26} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-emerald-100 px-3 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-emerald-800 border border-emerald-300">
+                      100% Transparent Billing
+                    </span>
+                    <span className="hidden sm:inline-block text-xs font-bold text-slate-500">&bull; Written Promise</span>
+                  </div>
+                  <h3 className="mt-1 text-xl sm:text-2xl font-black text-slate-900">
+                    Zero Hidden Cost Guarantee
+                  </h3>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-emerald-200 bg-white/90 px-4 py-2 text-xs font-bold text-emerald-800 shadow-xs text-center sm:text-right">
+                <span>Jo likha hai, sirf wahi lagega. No surprise bills!</span>
+              </div>
+            </div>
+
+            <p className="mt-4 text-xs sm:text-sm text-slate-600 font-medium leading-relaxed">
+              Legacy ERP companies trial ke baad alag-alag charges jodti hain. EduTechLab me aapke institute ke liye koi chhipe hue kharche nahi hain:
+            </p>
+
+            <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {/* Item 1 */}
+              <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs hover:border-emerald-300 hover:shadow-md transition">
+                <div className="flex items-center justify-between">
+                  <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-100 text-emerald-700">
+                    <MessageCircle size={18} />
+                  </span>
+                  <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-black text-emerald-700 border border-emerald-200">
+                    ₹0 CHARGE
+                  </span>
+                </div>
+                <h4 className="mt-3 text-sm font-black text-slate-900">Zero SMS Gateway Bills</h4>
+                <p className="mt-1.5 text-xs text-slate-600 leading-relaxed font-medium">
+                  Dusre vendors har SMS ka 25–30 paise charge karte hain. Humara system direct WhatsApp web link alerts deta hai — <strong>Unlimited WhatsApp Alerts 100% Free</strong>.
+                </p>
+              </div>
+
+              {/* Item 2 */}
+              <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs hover:border-emerald-300 hover:shadow-md transition">
+                <div className="flex items-center justify-between">
+                  <span className="grid h-9 w-9 place-items-center rounded-xl bg-purple-100 text-purple-700">
+                    <Zap size={18} />
+                  </span>
+                  <span className="rounded-md bg-purple-50 px-2 py-0.5 text-[10px] font-black text-purple-700 border border-purple-200">
+                    ₹0 SETUP
+                  </span>
+                </div>
+                <h4 className="mt-3 text-sm font-black text-slate-900">Zero Onboarding & Setup Fee</h4>
+                <p className="mt-1.5 text-xs text-slate-600 leading-relaxed font-medium">
+                  Purane software installation aur training ke naam par ₹20,000–₹50,000 upfront maangte hain. EduTechLab me <strong>₹0 Setup Fee</strong> hai aur 5 min me chalu hota hai.
+                </p>
+              </div>
+
+              {/* Item 3 */}
+              <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs hover:border-emerald-300 hover:shadow-md transition">
+                <div className="flex items-center justify-between">
+                  <span className="grid h-9 w-9 place-items-center rounded-xl bg-blue-100 text-blue-700">
+                    <Download size={18} />
+                  </span>
+                  <span className="rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-black text-blue-700 border border-blue-200">
+                    NO LOCK-IN
+                  </span>
+                </div>
+                <h4 className="mt-3 text-sm font-black text-slate-900">100% Free Data Export</h4>
+                <p className="mt-1.5 text-xs text-slate-600 leading-relaxed font-medium">
+                  Aapka data 100% aapke control me hai. Kabhi bhi 1-Click me Students, Fees, aur Attendance ka poora Excel download karein. Zero vendor lock-in!
+                </p>
+              </div>
+
+              {/* Item 4 */}
+              <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs hover:border-emerald-300 hover:shadow-md transition">
+                <div className="flex items-center justify-between">
+                  <span className="grid h-9 w-9 place-items-center rounded-xl bg-amber-100 text-amber-700">
+                    <Users size={18} />
+                  </span>
+                  <span className="rounded-md bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700 border border-amber-200">
+                    UNLIMITED
+                  </span>
+                </div>
+                <h4 className="mt-3 text-sm font-black text-slate-900">Unlimited Teachers & Staff</h4>
+                <p className="mt-1.5 text-xs text-slate-600 leading-relaxed font-medium">
+                  Chahe aapke school me 5 teachers hon ya 50, sabhi ke liye separate staff login, attendance aur marks entry permissions <strong>bina kisi extra charge ke</strong> milti hai.
+                </p>
+              </div>
             </div>
           </div>
         </div>
