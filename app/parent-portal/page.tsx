@@ -34,6 +34,8 @@ import {
   X,
   Download,
   Share2,
+  Users,
+  Loader2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -139,12 +141,23 @@ type PortalData = {
     body: string;
     published_at: string;
   }>;
+  siblings?: Array<{
+    id: string;
+    admission_no: string;
+    roll_no: string | null;
+    full_name: string;
+    class_name: string;
+    section_name: string;
+    photo_url: string | null;
+    date_of_birth: string | null;
+  }>;
 };
 
 const SESSION_KEY = "edutechlab_parent_session";
 
 export default function ParentPortalPage() {
   const supabase = createClient();
+  const [primaryLoginTab, setPrimaryLoginTab] = useState<"phone" | "admission">("phone");
   const [admissionNo, setAdmissionNo] = useState("");
   const [authMode, setAuthMode] = useState<"phone" | "dob">("phone");
   const [phoneInput, setPhoneInput] = useState("");
@@ -152,6 +165,10 @@ export default function ParentPortalPage() {
   const [rememberMe, setRememberMe] = useState(true);
 
   const [loading, setLoading] = useState(false);
+  const [autoLoginState, setAutoLoginState] = useState<"magic" | "qr" | "id" | null>(null);
+  const [accessBadge, setAccessBadge] = useState<"magic" | "qr" | "phone" | "admission" | null>(null);
+  const [multipleSiblings, setMultipleSiblings] = useState<any[]>([]);
+  const [siblingNotice, setSiblingNotice] = useState("");
   const [error, setError] = useState("");
   const [data, setData] = useState<PortalData | null>(null);
   const [activeTab, setActiveTab] = useState<
@@ -162,28 +179,28 @@ export default function ParentPortalPage() {
   const [selectedReportCard, setSelectedReportCard] = useState<ReportCard | null>(null);
   const [logoError, setLogoError] = useState(false);
 
-  // QR scan quick preview
-  const [qrProfile, setQrProfile] = useState<any>(null);
-
-  // Auto-load remembered session on mount
+  // Auto-load remembered session or handle Magic Link / QR Scan on mount
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Check QR code scan param (?id=ADM-123 or ?adm=ADM-123)
     const params = new URLSearchParams(window.location.search);
     const idParam = params.get("id") || params.get("adm");
+    const isMagic = params.get("magic") === "1";
+    const isQr = params.get("qr") === "1" || (!isMagic && Boolean(idParam));
+    const phoneParam = params.get("phone");
+
+    // Option 3 (WhatsApp Magic Link) or Option 4 (Student ID Card QR Scan)
     if (idParam) {
       setAdmissionNo(idParam);
-      (async () => {
-        try {
-          const { data: res, error: rpcErr } = await supabase.rpc("get_student_qr_profile", {
-            p_admission_no: idParam.trim(),
-          });
-          if (!rpcErr && res?.success) {
-            setQrProfile(res);
-          }
-        } catch {}
-      })();
+      performMagicOrQrLookup(idParam, isMagic, isQr);
+      return;
+    }
+
+    // Direct phone link if provided in URL
+    if (phoneParam) {
+      const cleanP = phoneParam.replace(/\D/g, "");
+      setPhoneInput(cleanP);
+      performPhoneLookup(cleanP, undefined, undefined, true);
       return;
     }
 
@@ -192,23 +209,168 @@ export default function ParentPortalPage() {
       const saved = localStorage.getItem(SESSION_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.admissionNo && parsed.verificationValue) {
+        if (parsed.loginMethod === "phone" && parsed.phone) {
+          setPhoneInput(parsed.phone);
+          if (parsed.dob) setDobInput(parsed.dob);
+          performPhoneLookup(parsed.phone, parsed.dob, parsed.studentId, false);
+        } else if (parsed.admissionNo) {
           setAdmissionNo(parsed.admissionNo);
-          if (parsed.verificationType === "dob") {
-            setAuthMode("dob");
-            setDobInput(parsed.verificationValue);
-          } else {
-            setAuthMode("phone");
-            setPhoneInput(parsed.verificationValue);
+          if (parsed.isMagicLink || parsed.isQrScan) {
+            performMagicOrQrLookup(parsed.admissionNo, parsed.isMagicLink, parsed.isQrScan);
+          } else if (parsed.verificationValue) {
+            if (parsed.verificationType === "dob") {
+              setAuthMode("dob");
+              setDobInput(parsed.verificationValue);
+            } else {
+              setAuthMode("phone");
+              setPhoneInput(parsed.verificationValue);
+            }
+            performAdmissionLookup(
+              parsed.admissionNo,
+              parsed.verificationType || "phone",
+              parsed.verificationValue,
+              false
+            );
           }
-          // Auto login quietly
-          performLookup(parsed.admissionNo, parsed.verificationType, parsed.verificationValue, false);
         }
       }
     } catch {}
   }, []);
 
-  const performLookup = async (
+  // 1-Click WhatsApp Magic Link or ID Card QR Scan Auto-Login
+  const performMagicOrQrLookup = async (
+    adm: string,
+    isMagic: boolean,
+    isQr: boolean
+  ) => {
+    if (!adm.trim()) return;
+
+    setLoading(true);
+    setAutoLoginState(isMagic ? "magic" : isQr ? "qr" : "id");
+    setError("");
+
+    try {
+      const res = await fetch("/api/parent-portal/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          loginMethod: "admission",
+          admissionNo: adm.trim(),
+          isMagicLink: isMagic,
+          isQrScan: isQr,
+        }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        throw new Error(
+          json.error || "Student record verify nahi ho saka. Kripya niche diye gaye form se login karein."
+        );
+      }
+
+      setData(json as PortalData);
+      setLogoError(false);
+      setAccessBadge(isMagic ? "magic" : isQr ? "qr" : "admission");
+
+      try {
+        localStorage.setItem(
+          SESSION_KEY,
+          JSON.stringify({
+            loginMethod: "admission",
+            admissionNo: adm.trim(),
+            isMagicLink: isMagic,
+            isQrScan: isQr,
+          })
+        );
+      } catch {}
+    } catch (err: any) {
+      setError(err.message || "Auto-verification fail ho gaya.");
+    } finally {
+      setLoading(false);
+      setAutoLoginState(null);
+    }
+  };
+
+  // Option 1: Mobile-First Login with Sibling Support
+  const performPhoneLookup = async (
+    phone: string,
+    dob?: string,
+    studentId?: string,
+    saveToStorage = true
+  ) => {
+    const cleanPhoneDigits = phone.replace(/\D/g, "");
+    const last10 = cleanPhoneDigits.length >= 10 ? cleanPhoneDigits.slice(-10) : cleanPhoneDigits;
+
+    if (!last10 || last10.length < 8) {
+      setError("Kripya 10-digit ka valid registered mobile number darj karein.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    setMultipleSiblings([]);
+
+    try {
+      const res = await fetch("/api/parent-portal/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          loginMethod: "phone",
+          phone: last10,
+          dob: dob || undefined,
+          studentId: studentId || undefined,
+        }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        throw new Error(
+          json.error || "Koi student record nahi mila. Kripya school me registered number check karein."
+        );
+      }
+
+      // If multiple siblings linked to this phone
+      if (json.multiple && json.students) {
+        setMultipleSiblings(json.students);
+        setSiblingNotice(json.message || "Is mobile number se jude bachche:");
+        return;
+      }
+
+      if (!json.success || !json.student) {
+        throw new Error(
+          json.error || "Student record load nahi ho saka. Kripya school se sampark karein."
+        );
+      }
+
+      setData(json as PortalData);
+      setLogoError(false);
+      setAccessBadge("phone");
+      setMultipleSiblings([]);
+
+      if (saveToStorage && rememberMe) {
+        try {
+          localStorage.setItem(
+            SESSION_KEY,
+            JSON.stringify({
+              loginMethod: "phone",
+              phone: last10,
+              studentId: json.student.id,
+              dob: dob || undefined,
+            })
+          );
+        } catch {}
+      }
+    } catch (err: any) {
+      setError(err.message || "Mobile login fail ho gaya.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Admission Number + Secondary Verification Lookup
+  const performAdmissionLookup = async (
     adm: string,
     type: "phone" | "dob",
     val: string,
@@ -227,6 +389,7 @@ export default function ParentPortalPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          loginMethod: "admission",
           admissionNo: adm.trim(),
           verificationType: type,
           verificationValue: val.trim(),
@@ -243,12 +406,14 @@ export default function ParentPortalPage() {
 
       setData(json as PortalData);
       setLogoError(false);
+      setAccessBadge("admission");
 
       if (saveToStorage && rememberMe) {
         try {
           localStorage.setItem(
             SESSION_KEY,
             JSON.stringify({
+              loginMethod: "admission",
               admissionNo: adm.trim(),
               verificationType: type,
               verificationValue: val.trim(),
@@ -263,10 +428,15 @@ export default function ParentPortalPage() {
     }
   };
 
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handlePhoneFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    performPhoneLookup(phoneInput, dobInput, undefined, true);
+  };
+
+  const handleAdmissionFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const val = authMode === "phone" ? phoneInput : dobInput;
-    performLookup(admissionNo, authMode, val, true);
+    performAdmissionLookup(admissionNo, authMode, val, true);
   };
 
   const handleLogout = () => {
@@ -275,6 +445,8 @@ export default function ParentPortalPage() {
     setPhoneInput("");
     setDobInput("");
     setError("");
+    setMultipleSiblings([]);
+    setAccessBadge(null);
     setSelectedReportCard(null);
     try {
       localStorage.removeItem(SESSION_KEY);
@@ -283,6 +455,19 @@ export default function ParentPortalPage() {
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleShareWhatsApp = () => {
+    if (!data) return;
+    const orgName = data.institute.name || "School";
+    const stName = `${data.student.first_name} ${data.student.last_name || ""}`.trim();
+    const cls = data.student.class_name;
+    const adm = data.student.admission_no;
+    const portalUrl = `${window.location.origin}/parent-portal?id=${encodeURIComponent(adm)}&magic=1`;
+
+    const msg = `🏫 *${orgName.toUpperCase()} - PARENT PORTAL*\n\nRespected Family Member,\nAap yahan se *${stName}* (Class: ${cls}, ID: ${adm}) ka live school report card, daily attendance aur fee receipts dekh sakte hain.\n\n🔗 *1-Click Magic Link:* \n${portalUrl}\n\n_(Bina password ke direct student portal kholne ke liye upar diye link par click karein)_`;
+
+    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
   // Helper for School Initials
@@ -299,6 +484,37 @@ export default function ParentPortalPage() {
   // VIEW 1: LOGIN / VERIFICATION SCREEN
   // ==========================================
   if (!data) {
+    if (autoLoginState) {
+      return (
+        <main className="min-h-screen bg-gradient-to-b from-purple-50/70 via-slate-50 to-indigo-50/40 px-4 py-16 flex items-center justify-center selection:bg-purple-200">
+          <div className="w-full max-w-md rounded-3xl border border-purple-200/80 bg-white/95 p-8 text-center shadow-2xl backdrop-blur-md">
+            <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-600/30 animate-pulse">
+              {autoLoginState === "magic" ? <Sparkles size={32} /> : <QrCode size={32} />}
+            </div>
+            <h2 className="text-xl font-black text-slate-900 tracking-tight">
+              {autoLoginState === "magic"
+                ? "1-Click WhatsApp Magic Link"
+                : "Student Smart ID Card Scan"}
+            </h2>
+            <p className="mt-1.5 text-xs font-semibold text-purple-700">
+              Direct secure portal open ho raha hai...
+            </p>
+            {admissionNo && (
+              <p className="mt-2 text-xs text-slate-400">
+                Student Admission ID: <strong className="font-mono text-slate-700">{admissionNo}</strong>
+              </p>
+            )}
+            <div className="mt-6 flex justify-center">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+                <Loader2 size={16} className="animate-spin text-purple-600" />
+                <span>Checking records with school database...</span>
+              </div>
+            </div>
+          </div>
+        </main>
+      );
+    }
+
     return (
       <main className="min-h-screen bg-gradient-to-b from-purple-50/60 via-slate-50 to-indigo-50/40 px-4 py-8 sm:px-6 sm:py-14 selection:bg-purple-200">
         <div className="mx-auto max-w-lg">
@@ -325,177 +541,316 @@ export default function ParentPortalPage() {
             </p>
           </div>
 
-          {/* Quick QR Card if arrived via QR Scan */}
-          {qrProfile && qrProfile.success && (
-            <div className="mb-6 rounded-3xl border border-purple-200 bg-white p-5 shadow-md">
-              <div className="flex items-center gap-3">
-                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-purple-100 text-purple-700 font-bold">
-                  {qrProfile.student.photo_url ? (
-                    <img
-                      src={qrProfile.student.photo_url}
-                      alt={qrProfile.student.full_name}
-                      className="h-full w-full rounded-2xl object-cover"
-                    />
-                  ) : (
-                    <GraduationCap size={24} />
-                  )}
-                </div>
-                <div>
-                  <span className="text-[10px] font-bold uppercase text-purple-700">QR ID Scanned</span>
-                  <h3 className="font-bold text-sm text-slate-900">{qrProfile.student.full_name}</h3>
-                  <p className="text-xs text-slate-500">
-                    Class: {qrProfile.student.class_name} • Adm: {qrProfile.student.admission_no}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Main Login Card */}
           <div className="rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-8 shadow-xl shadow-slate-900/5 backdrop-blur-sm">
             <div className="flex items-center gap-2 border-b border-slate-100 pb-4 mb-5">
               <ShieldCheck size={20} className="text-purple-600" />
               <div>
                 <h2 className="text-sm font-extrabold text-slate-900">Student Identity Verification</h2>
-                <p className="text-[11px] text-slate-400 font-medium">Bina kisi password ke direct secure login</p>
+                <p className="text-[11px] text-slate-400 font-medium">Bina kisi password ke direct secure access</p>
               </div>
             </div>
 
-            <form onSubmit={handleFormSubmit} className="space-y-4">
-              {/* Field 1: Admission Number */}
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
-                  Student Admission No. / Roll No.
-                </label>
-                <div className="relative mt-1.5">
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. ADM-2026-001 ya Roll No"
-                    value={admissionNo}
-                    onChange={(e) => setAdmissionNo(e.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3.5 text-sm font-semibold text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-purple-600 focus:bg-white focus:ring-4 focus:ring-purple-600/10"
-                  />
-                </div>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  School ke ID card ya purani fee receipt par likha Admission No. darj karein.
-                </p>
-              </div>
+            {/* 2 Big Primary Tabs (Option 1 Mobile-First vs Option 1 Alt Admission No) */}
+            <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1 mb-5">
+              <button
+                type="button"
+                onClick={() => {
+                  setPrimaryLoginTab("phone");
+                  setError("");
+                  setMultipleSiblings([]);
+                }}
+                className={`flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-extrabold transition ${
+                  primaryLoginTab === "phone"
+                    ? "bg-white text-purple-700 shadow-sm"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <Smartphone size={14} />
+                <span>📱 Mobile Number</span>
+              </button>
 
-              {/* Field 2: Verification Mode Switcher (Phone vs DOB) */}
-              <div className="pt-2">
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">
-                  Verify With:
-                </label>
-                <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode("phone");
-                      setError("");
-                    }}
-                    className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition ${
-                      authMode === "phone"
-                        ? "bg-white text-purple-700 shadow-sm"
-                        : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    <Smartphone size={14} />
-                    <span>Mobile Number</span>
-                  </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPrimaryLoginTab("admission");
+                  setError("");
+                  setMultipleSiblings([]);
+                }}
+                className={`flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-extrabold transition ${
+                  primaryLoginTab === "admission"
+                    ? "bg-white text-purple-700 shadow-sm"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <CreditCard size={14} />
+                <span>🪪 Admission No.</span>
+              </button>
+            </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode("dob");
-                      setError("");
-                    }}
-                    className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition ${
-                      authMode === "dob"
-                        ? "bg-white text-purple-700 shadow-sm"
-                        : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    <CalendarDays size={14} />
-                    <span>Date of Birth (DOB)</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Dynamic Input based on Mode */}
-              {authMode === "phone" ? (
+            {/* TAB 1: MOBILE-FIRST LOGIN (OPTION 1) */}
+            {primaryLoginTab === "phone" && (
+              <form onSubmit={handlePhoneFormSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
                     Registered Mobile Number
                   </label>
-                  <input
-                    type="tel"
-                    required
-                    placeholder="e.g. 98765 43210"
-                    value={phoneInput}
-                    onChange={(e) => setPhoneInput(e.target.value)}
-                    className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3.5 text-sm font-semibold text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-purple-600 focus:bg-white focus:ring-4 focus:ring-purple-600/10"
-                  />
-                  <p className="mt-1 text-[11px] text-slate-400">
-                    School admission ke waqt diya gaya Parent/Guardian ka 10-digit mobile number.
+                  <div className="relative mt-1.5">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 font-bold text-xs">
+                      +91
+                    </div>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      required
+                      placeholder="98765 43210"
+                      value={phoneInput}
+                      onChange={(e) => setPhoneInput(e.target.value.replace(/\D/g, ""))}
+                      className="w-full pl-12 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-slate-50/50 text-sm font-bold text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-purple-600 focus:bg-white focus:ring-4 focus:ring-purple-600/10 tracking-wider"
+                    />
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-400 font-medium">
+                    Admission ke waqt school me diya gaya primary mobile number darj karein.
                   </p>
                 </div>
-              ) : (
+
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
-                    Student Date of Birth (DOB)
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Child Date of Birth (DOB) - Optional
+                    </label>
+                    <span className="text-[10px] text-slate-400 font-medium">Sirf multiple bachcho ke liye</span>
+                  </div>
                   <input
                     type="date"
-                    required
                     value={dobInput}
                     onChange={(e) => setDobInput(e.target.value)}
-                    className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3.5 text-sm font-semibold text-slate-900 outline-none transition focus:border-purple-600 focus:bg-white focus:ring-4 focus:ring-purple-600/10"
+                    className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-purple-600 focus:bg-white focus:ring-4 focus:ring-purple-600/10"
                   />
+                </div>
+
+                {/* Sibling Picker List if multiple students found */}
+                {multipleSiblings.length > 0 && (
+                  <div className="rounded-2xl border border-purple-200 bg-purple-50/80 p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-purple-900 font-bold text-xs">
+                      <Users size={16} className="text-purple-600 shrink-0" />
+                      <span>{siblingNotice || "Is number se multiple bachche linked hain:"}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {multipleSiblings.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => performPhoneLookup(phoneInput, undefined, s.id, true)}
+                          className="w-full flex items-center justify-between gap-3 p-3 rounded-xl bg-white border border-purple-200 hover:border-purple-600 hover:shadow-md transition text-left group"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-xl bg-purple-100 text-purple-700 font-bold flex items-center justify-center text-xs shrink-0 overflow-hidden">
+                              {s.photo_url ? (
+                                <img src={s.photo_url} alt={s.full_name} className="h-full w-full object-cover" />
+                              ) : (
+                                s.full_name[0]
+                              )}
+                            </div>
+                            <div>
+                              <h4 className="text-xs font-extrabold text-slate-900 group-hover:text-purple-700 transition">
+                                {s.full_name}
+                              </h4>
+                              <p className="text-[11px] text-slate-500">
+                                Class: <strong>{s.class_name}</strong> • Sec: {s.section_name} • ID: {s.admission_no}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="shrink-0 rounded-lg bg-purple-100 text-purple-700 p-1.5 group-hover:bg-purple-600 group-hover:text-white transition">
+                            <ArrowRight size={14} />
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Remember Me Checkbox */}
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="rememberMePhone"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="h-4 w-4 rounded-md border-slate-300 text-purple-600 focus:ring-purple-500"
+                  />
+                  <label htmlFor="rememberMePhone" className="text-xs font-medium text-slate-600 cursor-pointer">
+                    Is phone par login yaad rakhein (Persistent Access)
+                  </label>
+                </div>
+
+                {/* Error Message */}
+                {error && (
+                  <div className="flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 p-3.5 text-xs text-rose-700 animate-in fade-in">
+                    <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                {/* Submit Button */}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 py-4 text-sm font-bold text-white shadow-lg shadow-purple-600/25 transition hover:from-purple-500 hover:to-indigo-500 disabled:opacity-50 active:scale-[0.99]"
+                >
+                  {loading ? (
+                    <div className="flex items-center gap-2">
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>Checking Records...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <span>Student Dashboard Kholein</span>
+                      <ArrowRight size={16} />
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
+
+            {/* TAB 2: SMART ADMISSION / ROLL NUMBER LOGIN */}
+            {primaryLoginTab === "admission" && (
+              <form onSubmit={handleAdmissionFormSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                    Student Admission No. / Roll No.
+                  </label>
+                  <div className="relative mt-1.5">
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 35 ya ADM-2026-035"
+                      value={admissionNo}
+                      onChange={(e) => setAdmissionNo(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3.5 text-sm font-semibold text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-purple-600 focus:bg-white focus:ring-4 focus:ring-purple-600/10"
+                    />
+                  </div>
                   <p className="mt-1 text-[11px] text-slate-400">
-                    Bachche ki janmtithi (Date of birth) select karein jo school record me darj hai.
+                    💡 Chhota number (jaise sirf <strong>35</strong>) bhi kaam karega!
                   </p>
                 </div>
-              )}
 
-              {/* Remember Me Checkbox */}
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="rememberMe"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="h-4 w-4 rounded-md border-slate-300 text-purple-600 focus:ring-purple-500"
-                />
-                <label htmlFor="rememberMe" className="text-xs font-medium text-slate-600 cursor-pointer">
-                  Is phone par login yaad rakhein (Persistent Access)
-                </label>
-              </div>
+                <div className="pt-2">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">
+                    Verify With:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("phone");
+                        setError("");
+                      }}
+                      className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition ${
+                        authMode === "phone"
+                          ? "bg-white text-purple-700 shadow-sm"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      <Smartphone size={14} />
+                      <span>Mobile Number</span>
+                    </button>
 
-              {/* Error Message */}
-              {error && (
-                <div className="flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 p-3.5 text-xs text-rose-700 animate-in fade-in">
-                  <AlertCircle size={16} className="shrink-0 mt-0.5" />
-                  <span>{error}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("dob");
+                        setError("");
+                      }}
+                      className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition ${
+                        authMode === "dob"
+                          ? "bg-white text-purple-700 shadow-sm"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      <CalendarDays size={14} />
+                      <span>Date of Birth (DOB)</span>
+                    </button>
+                  </div>
                 </div>
-              )}
 
-              {/* Submit Button */}
-              <button
-                type="submit"
-                disabled={loading}
-                className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 py-4 text-sm font-bold text-white shadow-lg shadow-purple-600/25 transition hover:from-purple-500 hover:to-indigo-500 disabled:opacity-50 active:scale-[0.99]"
-              >
-                {loading ? (
-                  <span>Checking Records...</span>
+                {authMode === "phone" ? (
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Registered Mobile Number
+                    </label>
+                    <input
+                      type="tel"
+                      required
+                      placeholder="e.g. 98765 43210"
+                      value={phoneInput}
+                      onChange={(e) => setPhoneInput(e.target.value)}
+                      className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3.5 text-sm font-semibold text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-purple-600 focus:bg-white focus:ring-4 focus:ring-purple-600/10"
+                    />
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Parent ya Guardian ka registered 10-digit mobile number.
+                    </p>
+                  </div>
                 ) : (
-                  <>
-                    <span>Student Dashboard Kholein</span>
-                    <ArrowRight size={16} />
-                  </>
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Student Date of Birth (DOB)
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={dobInput}
+                      onChange={(e) => setDobInput(e.target.value)}
+                      className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3.5 text-sm font-semibold text-slate-900 outline-none transition focus:border-purple-600 focus:bg-white focus:ring-4 focus:ring-purple-600/10"
+                    />
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      School record me darj bachche ki Date of birth select karein.
+                    </p>
+                  </div>
                 )}
-              </button>
-            </form>
+
+                {/* Remember Me Checkbox */}
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="rememberMeAdm"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="h-4 w-4 rounded-md border-slate-300 text-purple-600 focus:ring-purple-500"
+                  />
+                  <label htmlFor="rememberMeAdm" className="text-xs font-medium text-slate-600 cursor-pointer">
+                    Is phone par login yaad rakhein (Persistent Access)
+                  </label>
+                </div>
+
+                {/* Error Message */}
+                {error && (
+                  <div className="flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 p-3.5 text-xs text-rose-700 animate-in fade-in">
+                    <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                {/* Submit Button */}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 py-4 text-sm font-bold text-white shadow-lg shadow-purple-600/25 transition hover:from-purple-500 hover:to-indigo-500 disabled:opacity-50 active:scale-[0.99]"
+                >
+                  {loading ? (
+                    <div className="flex items-center gap-2">
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>Checking Records...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <span>Student Dashboard Kholein</span>
+                      <ArrowRight size={16} />
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
 
             <div className="mt-6 border-t border-slate-100 pt-5 text-center text-xs text-slate-400 font-medium">
               School Teacher ya Admin hain?{" "}
@@ -566,6 +921,48 @@ export default function ParentPortalPage() {
       </header>
 
       <div className="mx-auto max-w-5xl px-4 pt-6 sm:px-6 space-y-6">
+        {/* SIBLING SWITCHER BAR (OPTION 1) */}
+        {data.siblings && data.siblings.length > 0 && (
+          <div className="rounded-2xl border border-purple-200/90 bg-gradient-to-r from-purple-50 via-indigo-50/70 to-blue-50/80 p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+            <div className="flex items-center gap-3">
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-purple-600 text-white font-bold shadow-xs">
+                <Users size={18} />
+              </div>
+              <div>
+                <h3 className="text-xs font-black text-slate-900">
+                  Multiple Children Linked (Sibling Portal)
+                </h3>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  Showing: <strong className="text-purple-700">{fullName}</strong> ({student.class_name})
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-bold text-slate-500">Doosre bachche ko dekhein:</span>
+              {data.siblings.map((sib) => (
+                <button
+                  key={sib.id}
+                  onClick={() =>
+                    performPhoneLookup(
+                      student.phone || student.guardian_phone || phoneInput,
+                      undefined,
+                      sib.id,
+                      true
+                    )
+                  }
+                  disabled={loading}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-purple-300 bg-white px-3 py-1.5 text-xs font-bold text-purple-700 hover:bg-purple-600 hover:text-white transition shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer"
+                >
+                  <span>{sib.full_name}</span>
+                  <span className="text-[10px] opacity-75">({sib.class_name})</span>
+                  <ArrowRight size={12} />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* 2. STUDENT HERO BIO CARD */}
         <div className="overflow-hidden rounded-3xl border border-purple-100 bg-white shadow-xl shadow-purple-900/5">
           <div className="bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 p-6 text-white sm:p-8 relative">
@@ -584,13 +981,28 @@ export default function ParentPortalPage() {
                 </div>
 
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full bg-emerald-400/20 px-2.5 py-0.5 text-[10px] font-black uppercase text-emerald-200 border border-emerald-400/30">
                       ● {student.status} Student
                     </span>
                     {student.blood_group && (
                       <span className="rounded-full bg-rose-400/20 px-2 py-0.5 text-[10px] font-bold text-rose-200 border border-rose-400/30 flex items-center gap-1">
                         <Droplet size={10} /> {student.blood_group}
+                      </span>
+                    )}
+
+                    {/* Access Verification Badges (Option 3 & Option 4) */}
+                    {accessBadge === "magic" ? (
+                      <span className="rounded-full bg-amber-400/20 px-2.5 py-0.5 text-[10px] font-black text-amber-200 border border-amber-400/30 flex items-center gap-1">
+                        <Sparkles size={11} /> 1-Click WhatsApp Verified
+                      </span>
+                    ) : accessBadge === "qr" ? (
+                      <span className="rounded-full bg-cyan-400/20 px-2.5 py-0.5 text-[10px] font-black text-cyan-200 border border-cyan-400/30 flex items-center gap-1">
+                        <QrCode size={11} /> Smart ID Card QR Verified
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-purple-400/20 px-2.5 py-0.5 text-[10px] font-black text-purple-200 border border-purple-400/30 flex items-center gap-1">
+                        <ShieldCheck size={11} /> Verified Parent Access
                       </span>
                     )}
                   </div>
@@ -605,8 +1017,8 @@ export default function ParentPortalPage() {
                 </div>
               </div>
 
-              {/* Parents Bio */}
-              <div className="rounded-2xl bg-white/10 p-4 backdrop-blur-sm text-xs text-white/90 space-y-1 sm:text-right border border-white/10">
+              {/* Parents Bio & WhatsApp Share Button */}
+              <div className="rounded-2xl bg-white/10 p-4 backdrop-blur-sm text-xs text-white/90 space-y-2 sm:text-right border border-white/10">
                 {student.father_name && (
                   <div>
                     <span className="text-white/60">Father:</span> <strong>{student.father_name}</strong>
@@ -622,6 +1034,17 @@ export default function ParentPortalPage() {
                     <span className="text-white/60">DOB:</span> <strong>{student.date_of_birth}</strong>
                   </div>
                 )}
+
+                {/* 1-Click WhatsApp Share Button (Option 3) */}
+                <div className="pt-1 flex sm:justify-end">
+                  <button
+                    onClick={handleShareWhatsApp}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 px-3 py-1.5 text-xs font-extrabold text-white shadow-md shadow-emerald-950/20 transition active:scale-95 cursor-pointer"
+                  >
+                    <Share2 size={13} />
+                    <span>WhatsApp par Share Karein</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

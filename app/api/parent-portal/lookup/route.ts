@@ -24,24 +24,16 @@ function calculateGrade(percentage: number, scale = DEFAULT_GRADING_SCALE) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { admissionNo, verificationType, verificationValue } = body;
-
-    const cleanAdm = String(admissionNo ?? "").trim();
-    const cleanVal = String(verificationValue ?? "").trim();
-
-    if (!cleanAdm) {
-      return NextResponse.json(
-        { error: "Student Admission Number is required." },
-        { status: 400 }
-      );
-    }
-
-    if (!cleanVal) {
-      return NextResponse.json(
-        { error: "Registered Mobile Number or Date of Birth is required for verification." },
-        { status: 400 }
-      );
-    }
+    const {
+      loginMethod, // "phone" | "admission" | "magic"
+      phone,
+      dob,
+      studentId,
+      admissionNo,
+      verificationValue,
+      isMagicLink,
+      isQrScan,
+    } = body;
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -50,10 +42,159 @@ export async function POST(req: NextRequest) {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    // 1. Find candidate students matching admission_no or roll_no (case-insensitive)
-    const { data: students, error: studentErr } = await admin
-      .from("students")
-      .select(`
+    let matchedStudent: any = null;
+
+    // ============================================================
+    // METHOD 1: LOGIN WITH MOBILE NUMBER (+ OPTIONAL DOB / SIBLINGS)
+    // ============================================================
+    if (loginMethod === "phone" || (phone && !admissionNo)) {
+      const cleanPhoneDigits = String(phone ?? "").replace(/\D/g, "");
+      const last10 = cleanPhoneDigits.length >= 10 ? cleanPhoneDigits.slice(-10) : cleanPhoneDigits;
+
+      if (!last10 || last10.length < 8) {
+        return NextResponse.json(
+          { error: "Kripya 10-digit ka valid registered mobile number darj karein." },
+          { status: 400 }
+        );
+      }
+
+      // Query students linked to this phone number
+      const { data: candidates, error: candErr } = await admin
+        .from("students")
+        .select(`
+          id,
+          organization_id,
+          admission_no,
+          roll_no,
+          first_name,
+          last_name,
+          status,
+          date_of_birth,
+          gender,
+          phone,
+          guardian_phone,
+          father_name,
+          mother_name,
+          guardian_name,
+          photo_url,
+          address,
+          blood_group,
+          class_id,
+          section_id,
+          classes (id, name),
+          sections (id, name)
+        `)
+        .or(`phone.ilike.%${last10}%,guardian_phone.ilike.%${last10}%`);
+
+      let matchedList = candidates || [];
+
+      // Also check student_parents link table
+      if (matchedList.length === 0) {
+        const { data: parentLinks } = await admin
+          .from("student_parents")
+          .select("student_id, parents(phone)")
+          .ilike("parents.phone", `%${last10}%`);
+
+        if (parentLinks && parentLinks.length > 0) {
+          const studentIds = parentLinks.map((pl) => pl.student_id);
+          const { data: pStudents } = await admin
+            .from("students")
+            .select(`
+              id,
+              organization_id,
+              admission_no,
+              roll_no,
+              first_name,
+              last_name,
+              status,
+              date_of_birth,
+              gender,
+              phone,
+              guardian_phone,
+              father_name,
+              mother_name,
+              guardian_name,
+              photo_url,
+              address,
+              blood_group,
+              class_id,
+              section_id,
+              classes (id, name),
+              sections (id, name)
+            `)
+            .in("id", studentIds);
+          matchedList = pStudents || [];
+        }
+      }
+
+      if (matchedList.length === 0) {
+        return NextResponse.json(
+          {
+            error:
+              "Is mobile number se koi student record nahi mila. Kripya school me registered primary mobile number darj karein.",
+          },
+          { status: 404 }
+        );
+      }
+
+      // If user selected a specific sibling child by ID
+      if (studentId) {
+        matchedStudent = matchedList.find((s) => s.id === studentId);
+      }
+
+      // If DOB is provided, verify DOB
+      if (!matchedStudent && dob) {
+        const cleanDob = String(dob).trim();
+        const dobMatch = matchedList.find((s) => {
+          if (!s.date_of_birth) return false;
+          return s.date_of_birth === cleanDob;
+        });
+        if (dobMatch) {
+          matchedStudent = dobMatch;
+        }
+      }
+
+      // If still not picked:
+      if (!matchedStudent) {
+        // If multiple siblings found, return list so parent can choose!
+        if (matchedList.length > 1 && !dob) {
+          return NextResponse.json({
+            success: true,
+            multiple: true,
+            message: `Is number se ${matchedList.length} bachche linked hain. Kripya bachche ko chunein:`,
+            students: matchedList.map((s) => ({
+              id: s.id,
+              admission_no: s.admission_no,
+              full_name: `${s.first_name} ${s.last_name || ""}`.trim(),
+              class_name: (s.classes as any)?.name || "Standard",
+              section_name: (s.sections as any)?.name || "—",
+              photo_url: s.photo_url,
+              date_of_birth: s.date_of_birth,
+            })),
+          });
+        }
+
+        // Exactly 1 child matched!
+        matchedStudent = matchedList[0];
+      }
+    }
+
+    // ============================================================
+    // METHOD 2: LOGIN WITH SMART FORGIVING ADMISSION NO / MAGIC / QR
+    // ============================================================
+    if (!matchedStudent) {
+      const cleanAdm = String(admissionNo ?? "").trim();
+
+      if (!cleanAdm) {
+        return NextResponse.json(
+          { error: "Student Admission Number ya Mobile Number zaroori hai." },
+          { status: 400 }
+        );
+      }
+
+      // Smart Forgiving Search:
+      // Exact match, Roll No match, suffix digits match (e.g. '35' matches 'ADM-2026-035' or '035')
+      let query = admin.from("students").select(`
         id,
         organization_id,
         admission_no,
@@ -75,98 +216,107 @@ export async function POST(req: NextRequest) {
         section_id,
         classes (id, name),
         sections (id, name)
-      `)
-      .or(`admission_no.ilike.${cleanAdm},roll_no.ilike.${cleanAdm}`);
+      `);
 
-    if (studentErr || !students || students.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            "No student found with this Admission Number. Please verify the admission number from the school fee receipt or ID card.",
-        },
-        { status: 404 }
-      );
-    }
+      // If user typed only digits (e.g. '35' or '02' or '1')
+      const isPureDigits = /^\d+$/.test(cleanAdm);
 
-    // 2. Normalize verification credential
-    const digitsOnlyVal = cleanVal.replace(/\D/g, "");
-    const last10Val = digitsOnlyVal.length >= 10 ? digitsOnlyVal.slice(-10) : digitsOnlyVal;
-
-    // Normalizing possible date input (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY)
-    let parsedDob: string | null = null;
-    if (cleanVal.includes("-") || cleanVal.includes("/") || cleanVal.includes(".")) {
-      const parts = cleanVal.split(/[-/.]/);
-      if (parts.length === 3) {
-        if (parts[0].length === 4) {
-          // YYYY-MM-DD
-          parsedDob = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
-        } else if (parts[2].length === 4) {
-          // DD-MM-YYYY
-          parsedDob = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
-        }
-      }
-    }
-
-    // 3. Match candidate student against phone or DOB
-    let matchedStudent: any = null;
-
-    for (const s of students) {
-      let isMatch = false;
-
-      // Check DOB
-      if (parsedDob && s.date_of_birth) {
-        if (s.date_of_birth === parsedDob || s.date_of_birth === cleanVal) {
-          isMatch = true;
-        }
-      } else if (s.date_of_birth && s.date_of_birth === cleanVal) {
-        isMatch = true;
+      if (isPureDigits) {
+        const padded3 = cleanAdm.padStart(3, "0"); // '35' -> '035'
+        const padded2 = cleanAdm.padStart(2, "0"); // '2' -> '02'
+        query = query.or(
+          `admission_no.ilike.${cleanAdm},admission_no.ilike.%-${cleanAdm},admission_no.ilike.%-${padded3},admission_no.ilike.%-${padded2},roll_no.ilike.${cleanAdm},admission_no.ilike.${padded2}`
+        );
+      } else {
+        query = query.or(
+          `admission_no.ilike.${cleanAdm},roll_no.ilike.${cleanAdm},admission_no.ilike.%${cleanAdm}%`
+        );
       }
 
-      // Check Student Phone & Guardian Phone (last 10 digits match)
-      if (!isMatch && last10Val.length >= 8) {
-        const sPhoneDigits = (s.phone || "").replace(/\D/g, "");
-        const sGuardianDigits = (s.guardian_phone || "").replace(/\D/g, "");
+      const { data: candidateStudents, error: candErr } = await query;
 
-        if (
-          (sPhoneDigits.length >= 8 && sPhoneDigits.slice(-10) === last10Val) ||
-          (sGuardianDigits.length >= 8 && sGuardianDigits.slice(-10) === last10Val)
-        ) {
-          isMatch = true;
-        }
+      if (candErr || !candidateStudents || candidateStudents.length === 0) {
+        return NextResponse.json(
+          {
+            error:
+              "Is number se koi student nahi mila. Kripya school ID card ya receipt par likha Admission No. check karein.",
+          },
+          { status: 404 }
+        );
       }
 
-      // If still not matched, check parent record in student_parents table
-      if (!isMatch && last10Val.length >= 8) {
-        const { data: parentLinks } = await admin
-          .from("student_parents")
-          .select("parents(phone)")
-          .eq("student_id", s.id);
+      // If 1-Click WhatsApp Magic Link or ID Card QR Scan is used:
+      if (isMagicLink || isQrScan) {
+        matchedStudent = candidateStudents[0];
+      } else {
+        // Credential verification (Phone or DOB)
+        const cleanVal = String(verificationValue ?? "").trim();
 
-        if (parentLinks && parentLinks.length > 0) {
-          for (const pl of parentLinks as any[]) {
-            const pPhoneDigits = (pl?.parents?.phone || "").replace(/\D/g, "");
-            if (pPhoneDigits.length >= 8 && pPhoneDigits.slice(-10) === last10Val) {
+        if (!cleanVal) {
+          // If pure digits were entered and exactly 1 student found, check if student has no phone/dob registered
+          if (candidateStudents.length === 1 && !candidateStudents[0].phone && !candidateStudents[0].date_of_birth) {
+            matchedStudent = candidateStudents[0];
+          } else {
+            return NextResponse.json(
+              { error: "Registered Mobile Number ya Date of Birth zaroori hai." },
+              { status: 400 }
+            );
+          }
+        } else {
+          const digitsOnlyVal = cleanVal.replace(/\D/g, "");
+          const last10Val = digitsOnlyVal.length >= 10 ? digitsOnlyVal.slice(-10) : digitsOnlyVal;
+
+          let parsedDob: string | null = null;
+          if (cleanVal.includes("-") || cleanVal.includes("/") || cleanVal.includes(".")) {
+            const parts = cleanVal.split(/[-/.]/);
+            if (parts.length === 3) {
+              if (parts[0].length === 4) {
+                parsedDob = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
+              } else if (parts[2].length === 4) {
+                parsedDob = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+              }
+            }
+          }
+
+          for (const s of candidateStudents) {
+            let isMatch = false;
+
+            // Check DOB
+            if (parsedDob && s.date_of_birth) {
+              if (s.date_of_birth === parsedDob || s.date_of_birth === cleanVal) isMatch = true;
+            } else if (s.date_of_birth && s.date_of_birth === cleanVal) {
               isMatch = true;
+            }
+
+            // Check Student & Guardian Phone
+            if (!isMatch && last10Val.length >= 8) {
+              const sPhoneDigits = (s.phone || "").replace(/\D/g, "");
+              const sGuardianDigits = (s.guardian_phone || "").replace(/\D/g, "");
+              if (
+                (sPhoneDigits.length >= 8 && sPhoneDigits.slice(-10) === last10Val) ||
+                (sGuardianDigits.length >= 8 && sGuardianDigits.slice(-10) === last10Val)
+              ) {
+                isMatch = true;
+              }
+            }
+
+            if (isMatch) {
+              matchedStudent = s;
               break;
             }
           }
         }
       }
 
-      if (isMatch) {
-        matchedStudent = s;
-        break;
+      if (!matchedStudent) {
+        return NextResponse.json(
+          {
+            error:
+              "Verification details match nahi hui. Kripya school me registered mobile number ya Date of birth sahi darj karein.",
+          },
+          { status: 401 }
+        );
       }
-    }
-
-    if (!matchedStudent) {
-      return NextResponse.json(
-        {
-          error:
-            "Verification credential did not match. Please enter the registered mobile number or Date of Birth provided during admission.",
-        },
-        { status: 401 }
-      );
     }
 
     // 4. Fetch Institution & Settings
@@ -194,7 +344,7 @@ export async function POST(req: NextRequest) {
       .eq("organization_id", matchedStudent.organization_id)
       .maybeSingle();
 
-    // 4.1 RESOLVE STORAGE URLS (Signed URLs for Logo and Student Photo)
+    // 4.1 Resolve Storage Signed URLs for Logo & Student Photo
     let resolvedLogoUrl: string | null = null;
     if (orgSettings?.logo_url) {
       const trimmedLogo = orgSettings.logo_url.trim();
@@ -205,16 +355,10 @@ export async function POST(req: NextRequest) {
         try {
           const { data: signedLogo } = await admin.storage
             .from("institution-assets")
-            .createSignedUrl(cleanLogoPath, 604800); // 7 days
-          if (signedLogo?.signedUrl) {
-            resolvedLogoUrl = signedLogo.signedUrl;
-          } else {
-            const { data: pub } = admin.storage.from("institution-assets").getPublicUrl(cleanLogoPath);
-            resolvedLogoUrl = pub?.publicUrl || null;
-          }
+            .createSignedUrl(cleanLogoPath, 604800);
+          resolvedLogoUrl = signedLogo?.signedUrl || admin.storage.from("institution-assets").getPublicUrl(cleanLogoPath).data?.publicUrl || null;
         } catch {
-          const { data: pub } = admin.storage.from("institution-assets").getPublicUrl(cleanLogoPath);
-          resolvedLogoUrl = pub?.publicUrl || null;
+          resolvedLogoUrl = admin.storage.from("institution-assets").getPublicUrl(cleanLogoPath).data?.publicUrl || null;
         }
       }
     }
@@ -230,15 +374,9 @@ export async function POST(req: NextRequest) {
           const { data: signedPhoto } = await admin.storage
             .from("institution-assets")
             .createSignedUrl(cleanPhotoPath, 604800);
-          if (signedPhoto?.signedUrl) {
-            resolvedPhotoUrl = signedPhoto.signedUrl;
-          } else {
-            const { data: pub } = admin.storage.from("institution-assets").getPublicUrl(cleanPhotoPath);
-            resolvedPhotoUrl = pub?.publicUrl || null;
-          }
+          resolvedPhotoUrl = signedPhoto?.signedUrl || admin.storage.from("institution-assets").getPublicUrl(cleanPhotoPath).data?.publicUrl || null;
         } catch {
-          const { data: pub } = admin.storage.from("institution-assets").getPublicUrl(cleanPhotoPath);
-          resolvedPhotoUrl = pub?.publicUrl || null;
+          resolvedPhotoUrl = admin.storage.from("institution-assets").getPublicUrl(cleanPhotoPath).data?.publicUrl || null;
         }
       }
     }
@@ -266,7 +404,6 @@ export async function POST(req: NextRequest) {
     const lateCount = records.filter((r) => r.status === "late").length;
     const percentage = totalMarked > 0 ? Math.round((presentCount / totalMarked) * 1000) / 10 : 0;
 
-    // Check today's attendance
     const todayStr = new Date().toISOString().slice(0, 10);
     const todayRecord = records.find((r) => r.attendance_date === todayStr);
 
@@ -288,8 +425,7 @@ export async function POST(req: NextRequest) {
     const totalDue = (feeDues || []).reduce((acc, d) => acc + Number(d.due_amount || 0), 0);
     const balance = Math.max(0, totalDue - totalPaid);
 
-    // 7. COMPREHENSIVE REPORT CARDS & EXAM MARKS
-    // Fetch all exams for this organization
+    // 7. Comprehensive Report Cards & Exam Marks
     const { data: orgExams } = await admin
       .from("exams")
       .select("id, name, exam_date, created_at")
@@ -300,14 +436,12 @@ export async function POST(req: NextRequest) {
     const gradingScale = (orgSettings?.grading_scale as any[]) || DEFAULT_GRADING_SCALE;
 
     for (const ex of orgExams || []) {
-      // 1. Get subjects defined for this exam
       const { data: examSubjects } = await admin
         .from("exam_subjects")
         .select("id, subject, max_marks, pass_percentage, sort_order")
         .eq("exam_id", ex.id)
         .order("sort_order", { ascending: true });
 
-      // 2. Get marks entered for this student in this exam
       const { data: studentMarks } = await admin
         .from("exam_marks")
         .select("id, subject, marks, max_marks, status, pass_percentage")
@@ -316,7 +450,6 @@ export async function POST(req: NextRequest) {
 
       const marksMap = new Map((studentMarks || []).map((m) => [m.subject, m]));
 
-      // Combine subjects and marks
       let totalObtained = 0;
       let totalMax = 0;
       let hasAnyMarks = false;
@@ -333,10 +466,7 @@ export async function POST(req: NextRequest) {
           hasAnyMarks = true;
           totalObtained += marksObtained;
           totalMax += maxMarks;
-
-          if (marksObtained < minPassMarks) {
-            allPassed = false;
-          }
+          if (marksObtained < minPassMarks) allPassed = false;
         } else {
           totalMax += maxMarks;
         }
@@ -361,7 +491,6 @@ export async function POST(req: NextRequest) {
         };
       });
 
-      // Also check if student has marks for subjects not in exam_subjects
       for (const sm of studentMarks || []) {
         if (!examSubjects?.some((s) => s.subject === sm.subject)) {
           const marksObtained = sm.marks !== null && sm.marks !== undefined ? Number(sm.marks) : null;
@@ -441,9 +570,55 @@ export async function POST(req: NextRequest) {
       .order("published_at", { ascending: false })
       .limit(10);
 
-    // 10. Assemble complete parent portal payload
+    // 9b. Find Siblings (other students linked to same phone/guardian in this institution)
+    let siblingList: any[] = [];
+    const studentPhoneDigits = (matchedStudent.phone || "").replace(/\D/g, "");
+    const guardianPhoneDigits = (matchedStudent.guardian_phone || "").replace(/\D/g, "");
+    const phoneToQuery =
+      guardianPhoneDigits.length >= 8
+        ? guardianPhoneDigits.slice(-10)
+        : studentPhoneDigits.length >= 8
+        ? studentPhoneDigits.slice(-10)
+        : "";
+
+    if (phoneToQuery && matchedStudent.organization_id) {
+      const { data: sibs } = await admin
+        .from("students")
+        .select(`
+          id,
+          admission_no,
+          roll_no,
+          first_name,
+          last_name,
+          status,
+          date_of_birth,
+          classes (id, name),
+          sections (id, name),
+          photo_url
+        `)
+        .eq("organization_id", matchedStudent.organization_id)
+        .neq("id", matchedStudent.id)
+        .or(`phone.ilike.%${phoneToQuery}%,guardian_phone.ilike.%${phoneToQuery}%`);
+
+      if (sibs && sibs.length > 0) {
+        siblingList = sibs.map((s) => ({
+          id: s.id,
+          admission_no: s.admission_no,
+          roll_no: s.roll_no,
+          full_name: `${s.first_name} ${s.last_name || ""}`.trim(),
+          class_name: (s.classes as any)?.name || "Standard",
+          section_name: (s.sections as any)?.name || "—",
+          photo_url: s.photo_url,
+          date_of_birth: s.date_of_birth,
+        }));
+      }
+    }
+
+    // 10. Assemble and return complete portal payload
     return NextResponse.json({
       success: true,
+      multiple: false,
+      siblings: siblingList,
       student: {
         id: matchedStudent.id,
         admission_no: matchedStudent.admission_no,
@@ -451,8 +626,8 @@ export async function POST(req: NextRequest) {
         first_name: matchedStudent.first_name,
         last_name: matchedStudent.last_name,
         status: matchedStudent.status || "active",
-        class_name: matchedStudent.classes?.name || "Not Assigned",
-        section_name: matchedStudent.sections?.name || "—",
+        class_name: (matchedStudent.classes as any)?.name || "Not Assigned",
+        section_name: (matchedStudent.sections as any)?.name || "—",
         photo_url: resolvedPhotoUrl,
         gender: matchedStudent.gender || null,
         date_of_birth: matchedStudent.date_of_birth || null,

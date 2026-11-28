@@ -924,7 +924,7 @@ export default function IdCardGenerator() {
               const initials = `${s.first_name[0] || ""}${(s.last_name || "")[0] || ""}`.toUpperCase();
 
               // QR encodes direct parent portal / attendance scan verification URL
-              const qrData = `${originUrl}/parent-portal?id=${encodeURIComponent(s.admission_no)}`;
+              const qrData = `${originUrl}/parent-portal?id=${encodeURIComponent(s.admission_no)}&qr=1`;
 
               const sFee = feeMap[s.id];
               const hasFeeDues = sFee && sFee.hasDues;
@@ -2388,7 +2388,7 @@ export default function IdCardGenerator() {
             <div className="my-5 flex flex-col items-center">
               <div className="rounded-2xl border-2 border-purple-200 bg-white p-4 shadow-lg">
                 <QRCodeImage
-                  value={`${originUrl}/parent-portal?id=${encodeURIComponent(inspectStudent.admission_no)}`}
+                  value={`${originUrl}/parent-portal?id=${encodeURIComponent(inspectStudent.admission_no)}&qr=1`}
                   className="h-44 w-44 object-contain"
                   size={500}
                 />
@@ -2397,7 +2397,7 @@ export default function IdCardGenerator() {
                 Point your phone camera here to scan instantly!
               </p>
               <div className="mt-1 flex items-center gap-1.5 text-[11px] font-mono text-purple-700 bg-purple-50 px-3 py-1 rounded-lg border border-purple-200">
-                <span>{`${originUrl}/parent-portal?id=${inspectStudent.admission_no}`}</span>
+                <span>{`${originUrl}/parent-portal?id=${inspectStudent.admission_no}&qr=1`}</span>
               </div>
             </div>
 
@@ -2436,7 +2436,7 @@ export default function IdCardGenerator() {
             {/* Action Buttons */}
             <div className="space-y-2">
               <a
-                href={`${originUrl}/parent-portal?id=${encodeURIComponent(inspectStudent.admission_no)}`}
+                href={`${originUrl}/parent-portal?id=${encodeURIComponent(inspectStudent.admission_no)}&qr=1`}
                 target="_blank"
                 rel="noreferrer"
                 className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-purple-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-purple-700 transition shadow-sm"

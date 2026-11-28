@@ -48,7 +48,7 @@ export interface AbsentAlertParams {
 export function formatAbsentAlertMessage(params: AbsentAlertParams): string {
   const org = (params.schoolName || params.institutionName || "School Administration").toUpperCase();
   const { studentName, className, admissionNo, date, schoolPhone } = params;
-  const pUrl = params.portalUrl || (params.originUrl ? `${params.originUrl}/students` : "");
+  const pUrl = params.portalUrl || (params.originUrl ? `${params.originUrl}/parent-portal?id=${encodeURIComponent(admissionNo)}&magic=1` : "");
 
   return `🏫 *${org}*
 📅 *Date:* ${date}
@@ -58,7 +58,7 @@ This is to notify you that your ward *${studentName}* ${className ? `(Class: ${c
 
 If this is due to illness or an unavoidable emergency, please update the school administration.
 
-${pUrl ? `🔗 *Live Student Portal & Attendance:* \n${pUrl}\n` : ""}${schoolPhone ? `📞 *School Helpline:* ${schoolPhone}\n` : ""}
+${pUrl ? `🔗 *1-Click Student Portal & Attendance:* \n${pUrl}\n` : ""}${schoolPhone ? `📞 *School Helpline:* ${schoolPhone}\n` : ""}
 _Regards,_
 *Principal / Administration Office*`;
 }
@@ -81,7 +81,7 @@ export function formatFeeReminderMessage(params: FeeReminderParams): string {
   const org = (params.schoolName || params.institutionName || "School Administration").toUpperCase();
   const { studentName, className, admissionNo, dueAmount, dueMonthsCount, schoolPhone } = params;
   const numAmount = typeof dueAmount === "number" ? dueAmount.toLocaleString("en-IN") : dueAmount;
-  const pUrl = params.portalUrl || (params.originUrl ? `${params.originUrl}/fees` : "");
+  const pUrl = params.portalUrl || (params.originUrl ? `${params.originUrl}/parent-portal?id=${encodeURIComponent(admissionNo)}&magic=1` : "");
 
   return `🏫 *${org} - FEE REMINDER NOTICE*
 
@@ -96,7 +96,7 @@ This is a gentle reminder regarding the outstanding tuition fees for your child:
 ${dueMonthsCount ? `⏳ *Overdue Period:* ${dueMonthsCount} Month(s)\n` : ""}
 Kindly clear the pending balance at the school fees counter at the earliest to ensure uninterrupted academic services.
 
-${pUrl ? `🧾 *View Digital Fee Statement & Receipts:* \n${pUrl}\n` : ""}${schoolPhone ? `📞 *Accounts Helpdesk:* ${schoolPhone}\n` : ""}
+${pUrl ? `🔗 *1-Click Student & Fee Portal:* \n${pUrl}\n` : ""}${schoolPhone ? `📞 *Accounts Helpdesk:* ${schoolPhone}\n` : ""}
 _Thank you for your cooperation!_
 *Accounts & Finance Department*`;
 }
@@ -117,7 +117,7 @@ export interface AttendanceSuccessParams {
 export function formatAttendanceSuccessMessage(params: AttendanceSuccessParams): string {
   const org = (params.schoolName || params.institutionName || "School Administration").toUpperCase();
   const { studentName, className, admissionNo, date, time, feeNotice } = params;
-  const pUrl = params.portalUrl || (params.originUrl ? `${params.originUrl}/attendance` : "");
+  const pUrl = params.portalUrl || (params.originUrl ? `${params.originUrl}/parent-portal?id=${encodeURIComponent(admissionNo)}&magic=1` : "");
 
   return `🏫 *${org} - GATE ATTENDANCE NOTICE*
 📅 *Date:* ${date}
@@ -125,7 +125,7 @@ export function formatAttendanceSuccessMessage(params: AttendanceSuccessParams):
 Dear Parent,
 Your ward *${studentName}* ${className ? `(Class: ${className})` : ""}${admissionNo ? ` [ID: ${admissionNo}]` : ""} has safely arrived at school and was marked ✅ *PRESENT* at *${time}* via Smart Gate QR Scan.
 ${feeNotice ? `\n💳 *Account Status:* ${feeNotice}\n` : ""}
-${pUrl ? `🔗 *Check Live Attendance History:* \n${pUrl}\n` : ""}
+${pUrl ? `🔗 *1-Click Student & Attendance Portal:* \n${pUrl}\n` : ""}
 _Regards,_
 *School Safety & Security Cell*`;
 }
