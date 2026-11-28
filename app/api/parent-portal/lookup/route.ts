@@ -1,6 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+const DEFAULT_GRADING_SCALE = [
+  { min: 91, grade: "A1", remark: "Outstanding" },
+  { min: 81, grade: "A2", remark: "Excellent" },
+  { min: 71, grade: "B1", remark: "Very Good" },
+  { min: 61, grade: "B2", remark: "Good" },
+  { min: 51, grade: "C1", remark: "Above Average" },
+  { min: 41, grade: "C2", remark: "Average" },
+  { min: 33, grade: "D", remark: "Pass" },
+  { min: 0, grade: "E / Fail", remark: "Needs Improvement" },
+];
+
+function calculateGrade(percentage: number, scale = DEFAULT_GRADING_SCALE) {
+  for (const s of scale) {
+    if (percentage >= s.min) {
+      return { grade: s.grade, remark: s.remark };
+    }
+  }
+  return { grade: "E", remark: "Needs Improvement" };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -168,9 +188,68 @@ export async function POST(req: NextRequest) {
 
     const { data: orgSettings } = await admin
       .from("organization_settings")
-      .select("phone, email, address, logo_url, currency, primary_color, secondary_color, marksheet_title")
+      .select(
+        "phone, email, address, logo_url, currency, primary_color, secondary_color, marksheet_title, grading_scale, authorized_signatory"
+      )
       .eq("organization_id", matchedStudent.organization_id)
       .maybeSingle();
+
+    // 4.1 RESOLVE STORAGE URLS (Signed URLs for Logo and Student Photo)
+    let resolvedLogoUrl: string | null = null;
+    if (orgSettings?.logo_url) {
+      const trimmedLogo = orgSettings.logo_url.trim();
+      if (trimmedLogo.startsWith("http://") || trimmedLogo.startsWith("https://") || trimmedLogo.startsWith("data:")) {
+        resolvedLogoUrl = trimmedLogo;
+      } else {
+        const cleanLogoPath = trimmedLogo.replace(/^institution-assets\//, "").replace(/^\/+/, "");
+        try {
+          const { data: signedLogo } = await admin.storage
+            .from("institution-assets")
+            .createSignedUrl(cleanLogoPath, 604800); // 7 days
+          if (signedLogo?.signedUrl) {
+            resolvedLogoUrl = signedLogo.signedUrl;
+          } else {
+            const { data: pub } = admin.storage.from("institution-assets").getPublicUrl(cleanLogoPath);
+            resolvedLogoUrl = pub?.publicUrl || null;
+          }
+        } catch {
+          const { data: pub } = admin.storage.from("institution-assets").getPublicUrl(cleanLogoPath);
+          resolvedLogoUrl = pub?.publicUrl || null;
+        }
+      }
+    }
+
+    let resolvedPhotoUrl: string | null = null;
+    if (matchedStudent.photo_url) {
+      const trimmedPhoto = matchedStudent.photo_url.trim();
+      if (trimmedPhoto.startsWith("http://") || trimmedPhoto.startsWith("https://") || trimmedPhoto.startsWith("data:")) {
+        resolvedPhotoUrl = trimmedPhoto;
+      } else {
+        const cleanPhotoPath = trimmedPhoto.replace(/^institution-assets\//, "").replace(/^\/+/, "");
+        try {
+          const { data: signedPhoto } = await admin.storage
+            .from("institution-assets")
+            .createSignedUrl(cleanPhotoPath, 604800);
+          if (signedPhoto?.signedUrl) {
+            resolvedPhotoUrl = signedPhoto.signedUrl;
+          } else {
+            const { data: pub } = admin.storage.from("institution-assets").getPublicUrl(cleanPhotoPath);
+            resolvedPhotoUrl = pub?.publicUrl || null;
+          }
+        } catch {
+          const { data: pub } = admin.storage.from("institution-assets").getPublicUrl(cleanPhotoPath);
+          resolvedPhotoUrl = pub?.publicUrl || null;
+        }
+      }
+    }
+
+    // 4.2 Fetch Academic Session
+    const { data: sessions } = await admin
+      .from("academic_sessions")
+      .select("id, name, is_current")
+      .eq("organization_id", matchedStudent.organization_id);
+    const currentSession = (sessions || []).find((s) => s.is_current) || sessions?.[0];
+    const sessionName = currentSession?.name || "2025-2026";
 
     // 5. Fetch Attendance (Summary & last 60 records)
     const { data: attendanceRecords } = await admin
@@ -209,29 +288,137 @@ export async function POST(req: NextRequest) {
     const totalDue = (feeDues || []).reduce((acc, d) => acc + Number(d.due_amount || 0), 0);
     const balance = Math.max(0, totalDue - totalPaid);
 
-    // 7. Fetch Exam Marks
-    const { data: marksData } = await admin
-      .from("exam_marks")
-      .select(`
-        id,
-        exam_id,
-        subject,
-        marks,
-        max_marks,
-        status,
-        exams (id, name, exam_date)
-      `)
-      .eq("student_id", matchedStudent.id);
+    // 7. COMPREHENSIVE REPORT CARDS & EXAM MARKS
+    // Fetch all exams for this organization
+    const { data: orgExams } = await admin
+      .from("exams")
+      .select("id, name, exam_date, created_at")
+      .eq("organization_id", matchedStudent.organization_id)
+      .order("created_at", { ascending: false });
 
-    const examMarks = (marksData || []).map((m: any) => ({
-      exam_id: m.exam_id,
-      exam_name: m.exams?.name || "Term Exam",
-      exam_date: m.exams?.exam_date || null,
-      subject: m.subject,
-      marks: Number(m.marks || 0),
-      max_marks: Number(m.max_marks || 100),
-      status: m.status || "marked",
-    }));
+    const reportCards: any[] = [];
+    const gradingScale = (orgSettings?.grading_scale as any[]) || DEFAULT_GRADING_SCALE;
+
+    for (const ex of orgExams || []) {
+      // 1. Get subjects defined for this exam
+      const { data: examSubjects } = await admin
+        .from("exam_subjects")
+        .select("id, subject, max_marks, pass_percentage, sort_order")
+        .eq("exam_id", ex.id)
+        .order("sort_order", { ascending: true });
+
+      // 2. Get marks entered for this student in this exam
+      const { data: studentMarks } = await admin
+        .from("exam_marks")
+        .select("id, subject, marks, max_marks, status, pass_percentage")
+        .eq("exam_id", ex.id)
+        .eq("student_id", matchedStudent.id);
+
+      const marksMap = new Map((studentMarks || []).map((m) => [m.subject, m]));
+
+      // Combine subjects and marks
+      let totalObtained = 0;
+      let totalMax = 0;
+      let hasAnyMarks = false;
+      let allPassed = true;
+
+      const subjectRows = (examSubjects || []).map((s) => {
+        const sm = marksMap.get(s.subject);
+        const marksObtained = sm && sm.marks !== null && sm.marks !== undefined ? Number(sm.marks) : null;
+        const maxMarks = Number(s.max_marks || sm?.max_marks || 100);
+        const passPct = Number(s.pass_percentage || sm?.pass_percentage || 33);
+        const minPassMarks = Math.round((maxMarks * passPct) / 100);
+
+        if (marksObtained !== null) {
+          hasAnyMarks = true;
+          totalObtained += marksObtained;
+          totalMax += maxMarks;
+
+          if (marksObtained < minPassMarks) {
+            allPassed = false;
+          }
+        } else {
+          totalMax += maxMarks;
+        }
+
+        const pct = marksObtained !== null ? Math.round((marksObtained / maxMarks) * 1000) / 10 : null;
+        const subjectGrade = pct !== null ? calculateGrade(pct, gradingScale) : null;
+
+        return {
+          subject: s.subject,
+          marks: marksObtained,
+          max_marks: maxMarks,
+          pass_marks: minPassMarks,
+          percentage: pct,
+          grade: subjectGrade?.grade || "—",
+          remark: subjectGrade?.remark || "—",
+          status:
+            marksObtained === null
+              ? "pending"
+              : marksObtained >= minPassMarks
+              ? "pass"
+              : "fail",
+        };
+      });
+
+      // Also check if student has marks for subjects not in exam_subjects
+      for (const sm of studentMarks || []) {
+        if (!examSubjects?.some((s) => s.subject === sm.subject)) {
+          const marksObtained = sm.marks !== null && sm.marks !== undefined ? Number(sm.marks) : null;
+          const maxMarks = Number(sm.max_marks || 100);
+          const minPassMarks = Math.round((maxMarks * 33) / 100);
+
+          if (marksObtained !== null) {
+            hasAnyMarks = true;
+            totalObtained += marksObtained;
+            totalMax += maxMarks;
+            if (marksObtained < minPassMarks) allPassed = false;
+          } else {
+            totalMax += maxMarks;
+          }
+
+          const pct = marksObtained !== null ? Math.round((marksObtained / maxMarks) * 1000) / 10 : null;
+          const subjectGrade = pct !== null ? calculateGrade(pct, gradingScale) : null;
+
+          subjectRows.push({
+            subject: sm.subject,
+            marks: marksObtained,
+            max_marks: maxMarks,
+            pass_marks: minPassMarks,
+            percentage: pct,
+            grade: subjectGrade?.grade || "—",
+            remark: subjectGrade?.remark || "—",
+            status:
+              marksObtained === null
+                ? "pending"
+                : marksObtained >= minPassMarks
+                ? "pass"
+                : "fail",
+          });
+        }
+      }
+
+      const overallPercentage =
+        totalMax > 0 && hasAnyMarks ? Math.round((totalObtained / totalMax) * 1000) / 10 : 0;
+      const overallGrade = hasAnyMarks
+        ? calculateGrade(overallPercentage, gradingScale)
+        : { grade: "—", remark: "Marks Pending" };
+
+      reportCards.push({
+        exam_id: ex.id,
+        exam_name: ex.name,
+        exam_date: ex.exam_date || null,
+        session_name: sessionName,
+        has_marks: hasAnyMarks,
+        total_obtained: hasAnyMarks ? totalObtained : null,
+        total_max: totalMax,
+        percentage: hasAnyMarks ? overallPercentage : null,
+        grade: overallGrade.grade,
+        remark: overallGrade.remark,
+        result: !hasAnyMarks ? "Evaluation Pending" : allPassed ? "PASSED" : "NEEDS IMPROVEMENT",
+        subjects: subjectRows,
+      });
+    }
 
     // 8. Fetch Daily Class Homework
     let homeworkList: any[] = [];
@@ -266,7 +453,7 @@ export async function POST(req: NextRequest) {
         status: matchedStudent.status || "active",
         class_name: matchedStudent.classes?.name || "Not Assigned",
         section_name: matchedStudent.sections?.name || "—",
-        photo_url: matchedStudent.photo_url || null,
+        photo_url: resolvedPhotoUrl,
         gender: matchedStudent.gender || null,
         date_of_birth: matchedStudent.date_of_birth || null,
         father_name: matchedStudent.father_name || null,
@@ -280,13 +467,16 @@ export async function POST(req: NextRequest) {
       institute: {
         id: org?.id,
         name: org?.name || "Educational Institution",
-        logo_url: orgSettings?.logo_url || null,
+        logo_url: resolvedLogoUrl,
         phone: orgSettings?.phone || null,
         email: orgSettings?.email || null,
         address: orgSettings?.address || null,
         currency: orgSettings?.currency || "INR",
         primary_color: orgSettings?.primary_color || "#1e293b",
         secondary_color: orgSettings?.secondary_color || "#6657e8",
+        marksheet_title: orgSettings?.marksheet_title || "Statement of Marks",
+        authorized_signatory: orgSettings?.authorized_signatory || "Principal / Controller of Examinations",
+        grading_scale: gradingScale,
       },
       attendance: records.map((r) => ({
         date: r.attendance_date,
@@ -313,7 +503,7 @@ export async function POST(req: NextRequest) {
           reference: p.reference,
         })),
       },
-      exam_marks: examMarks,
+      report_cards: reportCards,
       homework: homeworkList,
       notices: (noticesData || []).map((n) => ({
         id: n.id,
